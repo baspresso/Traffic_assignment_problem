@@ -139,7 +139,7 @@ public:
 			cout << "from: " << init_node[i] + 1 << " to " << term_node[i] + 1 << " volume " << current_flow[i] << " cost " <<
 			delay(i) << '\n';
 	}
-	void solve_flow();
+	virtual void solve_flow() = 0;
 };
 
 class tap_od_equilibrium : public tap
@@ -166,7 +166,7 @@ public:
 		}
 		return del_max - del_min;
 	}
-	void balance_od_pair(int t);
+	virtual void balance_od_pair(int t) = 0;
 	double get_delta()
 	{
 		double delta = 0;
@@ -237,18 +237,5 @@ public:
 		else
 			return false;
 	}
-	void solve_flow();
-	/*
-	{
-		bool route_found = true;
-		while (route_found)
-		{
-			route_found = false;
-			for (int t = 0; t < number_of_od; t++)
-				route_found = find_new_route(t) || route_found;
-			balance();
-			//cout << objective_function() << '\n';
-		}
-	}
-	*/
+	virtual void solve_flow() = 0;
 };
