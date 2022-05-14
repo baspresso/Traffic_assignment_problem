@@ -364,25 +364,28 @@ public:
 	}
 };
 
-void test_tap_solution()
+template <typename method>
+void test_tap(string test)
+{
+	method tap_test(test);
+	tap_test.solve_flow();
+	tap_test.show_stat();
+}
+void test_tap_solutions()
 {
 	string line;
 	ifstream in("tests.txt");
 	while (getline(in, line))
 	{
 		cout << "test: " << line << '\n';
-		tap_tr_equilibrium tap_test_1(line);
-		tap_test_1.solve_flow();
-		tap_test_1.show_stat();
-		tap_matrix_equilibrium tap_test_2(line);
-		tap_test_2.solve_flow();
-		tap_test_2.show_stat();
+		test_tap<tap_tr_equilibrium>(line);
+		test_tap<tap_matrix_equilibrium>(line);
 	}
 }
 
 int main()
 {
 	cout << fixed << setprecision(6);
-	test_tap_solution();
+	test_tap_solutions();
 	return 0;
 }
