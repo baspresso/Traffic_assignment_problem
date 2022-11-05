@@ -9,16 +9,23 @@
 #include <iomanip>
 #include <fstream>
 #include <string>
+#include <chrono>
 
 using namespace std;
+
+#include <math/wide_decimal/decwide_t.h>
+
+using dec101_t = math::wide_decimal::decwide_t<INT32_C(101), std::uint32_t, void>;
+#define double dec101_t
 
 #include "tap_approaches.h"
 #include "class_matrix.h"
 
+
 class tap_tr_equilibrium : public tap_od_equilibrium
 {
 protected:
-	const double alpha = 1e-5, beta = 1e-7;
+	const double alpha = 1e-6, beta = 1e-6;
 	vector <vector <double>> od_route_flow;
 public:
 	tap_tr_equilibrium(string tr) : tap_od_equilibrium(tr) 
@@ -74,13 +81,17 @@ public:
 		for (auto& edge : route_2)
 			if (edges_1_temp.find(edge) == edges_1_temp.end())
 				edges_2.push_back(edge);
-		while (r - l > beta)
+		m = l + (r - l) / 2;
+		while (abs(get_edges_delay(edges_1, -m) - get_edges_delay(edges_2, m)) > beta)
 		{
-			m = l + (r - l) / 2;
+			m = (1e5 * (r - l)) / 2;
+			m += l * 1e5;
+			m /= 1e5;
 			if (get_edges_delay(edges_1, -m) - get_edges_delay(edges_2, m) >= 0)
 				l = m;
 			else
 				r = m;
+			//cout << m << ' ' << (r - l) << ' ' << (abs(get_edges_delay(edges_1, -m) - get_edges_delay(edges_2, m))) << '\n';
 		}
 		update_cur_flow(-flow_1, route_1);
 		update_cur_flow(-flow_2, route_2);
@@ -92,7 +103,8 @@ public:
 	}
 	void balance_od_pair(int t)
 	{
-		double r_max, r_max_del, r_min, r_min_del, temp;
+		int r_max, r_min;
+		double temp, r_max_del, r_min_del;
 		while (get_od_delta(t) > alpha)
 		{
 			r_max = -1; r_max_del = 0;
@@ -153,7 +165,7 @@ class tap_matrix_equilibrium : public tap_od_equilibrium
 protected:
 	matrix <double> At;
 	vector <vector <double>> od_flow;
-	const double eps = 1e-8, alpha = 1e-8;
+	const double eps = 1e-10, alpha = 1e-10;
 public:
 	void generate_At()
 	{
@@ -298,6 +310,7 @@ public:
 			update_od_del(t);
 		}
 	}
+	// changed criteria
 	void balance_odp_routes(int t)
 	{
 		flow_change(t, true);
@@ -309,7 +322,8 @@ public:
 		for (auto& route : od_routes[t])
 			for (auto& edge : route)
 				flow_now[M_edges[edge]][0] += get<2>(od_pairs[t]) / od_routes[t].size();
-		while ((flow_now - flow_prev).norm2() > eps)
+		double od_delta = eps + 1;
+		while (od_delta > eps)
 		{
 			flow_prev = flow_now;
 			G = create_G(flow_now, M_edges_inv);
@@ -321,6 +335,13 @@ public:
 			Temp = E - Temp;
 			Temp = G * Temp * g;
 			flow_now = flow_now - Temp;
+			od_flow[t] = vector <double>(number_of_edges, 0);
+			for (int i = 0; i < m; i++)
+				od_flow[t][M_edges_inv[i]] = flow_now[i][0];
+			flow_change(t, false);
+			od_delta = get_od_delta(t);
+			flow_change(t, true);
+			//cout << od_delta << ' ' << (flow_now - flow_prev).norm2() << '\n';
 		}
 		od_flow[t] = vector <double>(number_of_edges, 0);
 		for (int i = 0; i < m; i++)
@@ -358,12 +379,11 @@ public:
 		{
 			route_found = false;
 			for (int t = 0; t < number_of_od; t++)
-				route_found = find_new_route(t) || route_found;
+				route_found |= find_new_route(t);
 			balance();
 		}
 	}
 };
-
 template <typename method>
 void test_tap(string test)
 {
@@ -377,15 +397,20 @@ void test_tap_solutions()
 	ifstream in("tests.txt");
 	while (getline(in, line))
 	{
+		auto start = chrono::high_resolution_clock::now();
 		cout << "test: " << line << '\n';
-		test_tap<tap_tr_equilibrium>(line);
+		//test_tap<tap_tr_equilibrium>(line);
 		test_tap<tap_matrix_equilibrium>(line);
+		auto end = chrono::high_resolution_clock::now();
+		chrono::duration<float> duration = end - start;
+		cout << "Duration: " << duration.count() << " sec \n";
+
 	}
 }
 
 int main()
 {
-	cout << fixed << setprecision(6);
+	std::cout << std::setprecision(10);
 	test_tap_solutions();
 	return 0;
 }
