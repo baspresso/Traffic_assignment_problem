@@ -27,13 +27,27 @@ public:
 			temp2 += line[i++];
 		return stold(temp1) + stold(temp2) * (pow(0.1, temp2.size()));
 	}
+	int get_value_int(int& i, string& line)
+	{
+		while (!isNumber(line[i]))
+			i++;
+		string temp1 = "";
+		while (isNumber(line[i]))
+			temp1 += line[i++];
+		if (line[i++] != '.')
+			return stoi(temp1);
+		string temp2 = "";
+		while (isNumber(line[i]))
+			temp2 += line[i++];
+		return stold(temp1);
+	}
 	void get_edge(string& line)
 	{
 		int i = 0;
 		number_of_edges++;
-		init_node.push_back(get_value(i, line));
+		init_node.push_back(get_value_int(i, line));
 		init_node[number_of_edges - 1]--;
-		term_node.push_back(get_value(i, line));
+		term_node.push_back(get_value_int(i, line));
 		term_node[number_of_edges - 1]--;
 		capacity.push_back(get_value(i, line));
 		length.push_back(get_value(i, line));
@@ -42,7 +56,7 @@ public:
 		power.push_back(get_value(i, line));
 		speed.push_back(get_value(i, line));
 		toll.push_back(get_value(i, line));
-		link_type.push_back(get_value(i, line));
+		link_type.push_back(get_value_int(i, line));
 	}
 	void get_od_pair(ifstream& in)
 	{
@@ -51,12 +65,12 @@ public:
 		double demand;
 		string line;
 		getline(in, line);
-		origin = get_value(i, line) - 1;
+		origin = get_value_int(i, line) - 1;
 		getline(in, line);
 		i = 0;
 		for (int h = 0; h < number_of_nodes; h++)
 		{
-			dest = get_value(i, line) - 1;
+			dest = get_value_int(i, line) - 1;
 			demand = get_value(i, line);
 			i++;
 			if (demand > 0)
@@ -80,7 +94,7 @@ public:
 		in = ifstream(test + "_trips.txt");
 		getline(in, line);
 		int i = 0;
-		number_of_nodes = get_value(i, line);
+		number_of_nodes = get_value_int(i, line);
 		for (int j = 0; j < number_of_nodes; j++)
 			get_od_pair(in);
 	}
@@ -95,7 +109,7 @@ public:
 	double delay(int i, double extra_flow = 0)
 	{
 		double flow_on_edge = current_flow[i] + extra_flow;
-		return free_flow_time[i] * (1 + 0.15 * pow(flow_on_edge / capacity[i], 4));
+		return free_flow_time[i] + 0.15 * free_flow_time[i] * pow(flow_on_edge, 4) / pow(capacity[i], 4);
 	}
 	double get_edges_delay(vector <int>& edges, double extra_flow = 0)
 	{
