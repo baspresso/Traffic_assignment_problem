@@ -1,19 +1,48 @@
+// link struct implemented
+
+template <class v_type>										// value type
+struct link
+{
+public:
+	int init, term, type;
+	v_type capacity, length, free_flow_time, b, power, speed, toll, flow;
+	link(int init, int term, int type, v_type capacity, v_type length,
+		v_type free_flow_time, v_type b, v_type power, v_type speed, v_type toll) :
+		init(init), term(term), type(type), capacity(capacity), length(length),
+		free_flow_time(free_flow_time), b(b), power(power), speed(speed), toll(toll) { };
+	v_type delay(v_type extra_flow = 0)
+	{
+		return free_flow_time + 0.15 * free_flow_time * pow(flow + extra_flow, 4) / pow(capacity, 4);
+	}
+	v_type delay_integ(v_type flow_on_link = -1.454555555)
+	{
+		if (flow_on_link == -1.454555555)
+			flow_on_link = flow;
+		return free_flow_time * (flow_on_link + 0.15 * capacity * pow(flow_on_link / capacity, 5) / 5);
+	}
+	v_type delay_der(v_type extra_flow = 0)
+	{
+		return free_flow_time * 0.15 * 4 * pow((flow + extra_flow) / capacity, 3) / capacity;
+	}
+};
+
+template <typename v_type>										// value type
 class tap
 {
 protected:
-	vector <int> init_node, term_node, link_type;
-	vector <double> capacity, length, free_flow_time, b, power, speed, toll;
-	vector <double> current_flow;
-	vector <tuple <int, int, double>> od_pairs;
-	vector <vector <int>> adj_list;
-	int number_of_od, number_of_edges, number_of_nodes;
+	vector <link <v_type>> lnks;
+	vector <tuple <int, int, v_type>> od_pairs;
+	vector <vector <int>> adj_list;							// links for each node
+	int number_of_od, number_of_links, number_of_nodes;
 	string test;
+	vector <vector <vector <int>>> od_routes;
+	vector <v_type> od_delays;
 public:
 	bool isNumber(char c)
 	{
 		return c >= '0' && c <= '9';
 	}
-	double get_value(int& i, string& line)
+	v_type get_value(int& i, string& line)
 	{
 		while (!isNumber(line[i]))
 			i++;
@@ -41,28 +70,23 @@ public:
 			temp2 += line[i++];
 		return stold(temp1);
 	}
-	void get_edge(string& line)
+	void get_link(string& line)
 	{
 		int i = 0;
-		number_of_edges++;
-		init_node.push_back(get_value_int(i, line));
-		init_node[number_of_edges - 1]--;
-		term_node.push_back(get_value_int(i, line));
-		term_node[number_of_edges - 1]--;
-		capacity.push_back(get_value(i, line));
-		length.push_back(get_value(i, line));
-		free_flow_time.push_back(get_value(i, line));
-		b.push_back(get_value(i, line));
-		power.push_back(get_value(i, line));
-		speed.push_back(get_value(i, line));
-		toll.push_back(get_value(i, line));
-		link_type.push_back(get_value_int(i, line));
+		number_of_links++;
+		int init, term, type;
+		v_type capacity, length, free_flow_time, b, power, speed, toll, flow;
+		init = get_value_int(i, line) - 1; term = get_value_int(i, line) - 1;
+		capacity = get_value(i, line);	length = get_value(i, line);
+		free_flow_time = get_value(i, line); b = get_value(i, line);
+		power = get_value(i, line);	speed = get_value(i, line);
+		toll = get_value(i, line); type = get_value_int(i, line);
+		lnks.push_back(link<v_type>(init, term, type, capacity, length, free_flow_time, b, power, speed, toll));
 	}
 	void get_od_pair(ifstream& in)
 	{
-
 		int i = 0, origin, dest;
-		double demand;
+		v_type demand;
 		string line;
 		getline(in, line);
 		origin = get_value_int(i, line) - 1;
@@ -90,7 +114,7 @@ public:
 		string line;
 		ifstream in(test + "_net.txt");
 		while (getline(in, line))
-			get_edge(line);
+			get_link(line);
 		in = ifstream(test + "_trips.txt");
 		getline(in, line);
 		int i = 0;
@@ -98,50 +122,43 @@ public:
 		for (int j = 0; j < number_of_nodes; j++)
 			get_od_pair(in);
 	}
-	tap(string tn) : number_of_edges(0), number_of_od(0), test(tn)
+	tap(string tn) : number_of_links(0), number_of_od(0), test(tn)
 	{
 		get_data();
-		current_flow.resize(number_of_edges, 0);
+		//lnks.resize(number_of_links);
 		adj_list.resize(number_of_nodes);
-		for (int i = 0; i < number_of_edges; i++)
-			adj_list[init_node[i]].push_back(i);
+		for (int i = 0; i < number_of_links; i++)
+			adj_list[lnks[i].init].push_back(i);
+		od_routes.resize(this->number_of_od);
+		od_delays.resize(this->number_of_od);
 	}
-	double delay(int i, double extra_flow = 0)
+	v_type get_links_delay(vector <int>& lnk_list, v_type extra_flow = 0)
 	{
-		double flow_on_edge = current_flow[i] + extra_flow;
-		return free_flow_time[i] + 0.15 * free_flow_time[i] * pow(flow_on_edge, 4) / pow(capacity[i], 4);
-	}
-	double get_edges_delay(vector <int>& edges, double extra_flow = 0)
-	{
-		double ans = 0;
-		for (auto& edge : edges)
-			ans += delay(edge, extra_flow);
+		v_type ans = 0;
+		for (auto now : lnk_list)
+			ans += lnks[now].delay(extra_flow);
 		return ans;
 	}
-	double delay_integ(int i, double flow_on_edge)
+	v_type objective_function()
 	{
-		return free_flow_time[i] * (flow_on_edge + 0.15 * capacity[i] * pow(flow_on_edge / capacity[i], 5) / 5);
-	}
-	double objective_function()
-	{
-		double ans = 0, flow_on_edge;
-		for (int i = 0; i < number_of_edges; i++)
-			ans += delay_integ(i, current_flow[i]);
+		v_type ans = 0;
+		for (int i = 0; i < number_of_links; i++)
+			ans += lnks[i].delay_integ();
 		return ans;
 	}
-	double get_best_answer()
+	v_type get_best_answer()
 	{
-		double ans = 0, flow_on_edge;
+		v_type ans = 0, flow_on_link;
 		string line;
 		ifstream in(test + "_flow.txt");
 		int j = 0;
-		for (int i = 0; i < number_of_edges; i++)
+		for (int i = 0; i < number_of_links; i++)
 		{
 			getline(in, line);
 			j = 0;
 			get_value(j, line); get_value(j, line);
-			flow_on_edge = get_value(j, line);
-			ans += delay_integ(i, flow_on_edge);
+			flow_on_link = get_value(j, line);
+			ans += lnks[i].delay_integ(flow_on_link);
 		}
 		return ans;
 	}
@@ -149,69 +166,56 @@ public:
 	{
 		cout << "best ans: " << get_best_answer() << '\n';
 		cout << "obj function: " << objective_function() << '\n';
-		for (int i = 0; i < current_flow.size(); i++)
-			cout << "from: " << init_node[i] + 1 << " to " << term_node[i] + 1 << " volume " << current_flow[i] << " cost " <<
-			delay(i) << '\n';
+		for (int i = 0; i < number_of_links; i++)
+			cout << "from: " << lnks[i].init + 1 << " to " << lnks[i].term + 1 << " volume " << lnks[i].flow << " cost " <<
+			lnks[i].delay() << '\n';
 	}
-	virtual void solve_flow() = 0;
-};
-
-class tap_od_equilibrium : public tap
-{
-protected:
-	vector <vector <vector <int>>> od_routes;
-	vector <double> od_delays;
-public:
-	tap_od_equilibrium(string tn) : tap(tn)
+	v_type get_od_delta(int t)
 	{
-		od_routes.resize(number_of_od);
-		od_delays.resize(number_of_od);
-	}
-	double get_od_delta(int t)
-	{
-		double del_min = 1e9, del_max = 0, del_route;
+		v_type del_min = 1e9, del_max = 0, del_route;
 		if (od_routes[t].size() > 0)
-			del_min = get_edges_delay(od_routes[t][0]);
+			del_min = this->get_links_delay(od_routes[t][0]);
 		for (int i = 0; i < od_routes[t].size(); i++)
 		{
-			del_route = get_edges_delay(od_routes[t][i]);
+			del_route = get_links_delay(od_routes[t][i]);
+			//cout << del_route << '\n';
 			del_min = min(del_min, del_route);
 			del_max = max(del_max, del_route);
 		}
 		return del_max - del_min;
 	}
 	virtual void balance_od_pair(int t) = 0;
-	double get_delta()
+	v_type get_delta()
 	{
-		double delta = 0;
+		v_type delta = 0;
 		for (int t = 0; t < number_of_od; t++)
 			delta = max(delta, get_od_delta(t));
 		return delta;
 	}
 	void update_od_delays()
 	{
-		double delay;
+		v_type delay;
 		for (int t = 0; t < number_of_od; t++)
 		{
 			if (od_routes[t].size() > 0)
-				delay = get_edges_delay(od_routes[t][0]);
+				delay = get_links_delay(od_routes[t][0]);
 			for (auto& route : od_routes[t])
-				delay = min(delay, get_edges_delay(route));
+				delay = min(delay, get_links_delay(route));
 			od_delays[t] = delay;
 		}
 	}
 	bool find_new_route(int t)
 	{
-		priority_queue <pair <double, int>, vector <pair <double, int>>, greater <pair <double, int>>> q;
+		priority_queue <pair <v_type, int>, vector <pair <v_type, int>>, greater <pair <v_type, int>>> q;
 		int origin = get<0>(od_pairs[t]), dest = get<1>(od_pairs[t]), u;
 		q.push({ origin, -1 });
-		set <int> processed;
-		map <int, int> used_edge;
-		double temp;
-		while (q.top().second == -1 || term_node[q.top().second] != dest)
+		unordered_set <int> processed;
+		map <int, int> used_link;
+		v_type temp;
+		while (q.top().second == -1 || lnks[q.top().second].term != dest)
 		{
 			if (q.top().second != -1)
-				u = term_node[q.top().second];
+				u = lnks[q.top().second].term;
 			else
 				u = origin;
 			if (processed.find(u) != processed.end())
@@ -223,29 +227,29 @@ public:
 			if (processed.find(u) != processed.end())
 				continue;
 			processed.insert(u);
-			used_edge[u] = q.top().second;
+			used_link[u] = q.top().second;
 			q.pop();
-			for (auto edge : adj_list[u])
-				if (processed.find(term_node[edge]) == processed.end())
-					q.push({ temp + delay(edge), edge });
+			for (auto now : adj_list[u])
+				if (processed.find(lnks[now].term) == processed.end())
+					q.push({ temp + lnks[now].delay(), now});
 		}
-		used_edge[dest] = q.top().second;
-		double delay_cur_route = q.top().first;
+		used_link[dest] = q.top().second;
+		v_type delay_cur_route = q.top().first;
 		if (delay_cur_route < od_delays[t] || od_routes[t].size() == 0)
 		{
 			int now = dest;
 			vector <int> new_route;
 			while (now != origin)
 			{
-				new_route.push_back(used_edge[now]);
-				now = init_node[used_edge[now]];
+				new_route.push_back(used_link[now]);
+				now = lnks[used_link[now]].init;
 			}
 			reverse(new_route.begin(), new_route.end());
-			
+
 			od_routes[t].push_back(new_route);
 			if (od_routes[t].size() == 1)
-				for (auto edge : od_routes[t][0])
-					current_flow[edge] += get<2>(od_pairs[t]);
+				for (auto now : od_routes[t][0])
+					lnks[now].flow += get<2>(od_pairs[t]);
 			return true;
 		}
 		else
@@ -253,3 +257,101 @@ public:
 	}
 	virtual void solve_flow() = 0;
 };
+
+
+/*template <class v_type>
+class tap_od_equilibrium : public tap <v_type>
+{
+protected:
+public:
+	tap_od_equilibrium(string tn) : tap(tn)
+	{
+		od_routes.resize(this->number_of_od);
+		od_delays.resize(this->number_of_od);
+	}
+	v_type get_od_delta(int t)
+	{
+		v_type del_min = 1e9, del_max = 0, del_route;
+		if (od_routes[t].size() > 0)
+			del_min = this->get_links_delay(od_routes[t][0]);
+		for (int i = 0; i < od_routes[t].size(); i++)
+		{
+			del_route = get_links_delay(od_routes[t][i]);
+			del_min = min(del_min, del_route);
+			del_max = max(del_max, del_route);
+		}
+		return del_max - del_min;
+	}
+	virtual void balance_od_pair(int t) = 0;
+	v_type get_delta()
+	{
+		v_type delta = 0;
+		for (int t = 0; t < number_of_od; t++)
+			delta = max(delta, get_od_delta(t));
+		return delta;
+	}
+	void update_od_delays()
+	{
+		v_type delay;
+		for (int t = 0; t < number_of_od; t++)
+		{
+			if (od_routes[t].size() > 0)
+				delay = get_links_delay(od_routes[t][0]);
+			for (auto& route : od_routes[t])
+				delay = min(delay, get_links_delay(route));
+			od_delays[t] = delay;
+		}
+	}
+	bool find_new_route(int t)
+	{
+		priority_queue <pair <v_type, int>, vector <pair <v_type, int>>, greater <pair <v_type, int>>> q;
+		int origin = get<0>(od_pairs[t]), dest = get<1>(od_pairs[t]), u;
+		q.push({ origin, -1 });
+		unordered_set <int> processed;
+		map <int, int> used_link;
+		v_type temp;
+		while (q.top().second == -1 || lnks[q.top().second].term_node != dest)
+		{
+			if (q.top().second != -1)
+				u = lnks[q.top().second].term_node;
+			else
+				u = origin;
+			if (processed.find(u) != processed.end())
+			{
+				q.pop();
+				continue;
+			}
+			temp = q.top().first;
+			if (processed.find(u) != processed.end())
+				continue;
+			processed.insert(u);
+			used_link[u] = q.top().second;
+			q.pop();
+			for (auto now : adj_list[u])
+				if (processed.find(lnks[now].term_node) == processed.end())
+					q.push({ temp + lnks[now].delay, now });
+		}
+		used_link[dest] = q.top().second;
+		v_type delay_cur_route = q.top().first;
+		if (delay_cur_route < od_delays[t] || od_routes[t].size() == 0)
+		{
+			int now = dest;
+			vector <int> new_route;
+			while (now != origin)
+			{
+				new_route.push_back(used_link[now]);
+				now = lnks[used_link[now]].init;
+			}
+			reverse(new_route.begin(), new_route.end());
+			
+			od_routes[t].push_back(new_route);
+			if (od_routes[t].size() == 1)
+				for (auto now : od_routes[t][0])
+					lnks[now].current_flow += get<2>(od_pairs[t]);
+			return true;
+		}
+		else
+			return false;
+	}
+	virtual void solve_flow() = 0;
+};*/
