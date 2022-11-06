@@ -34,7 +34,7 @@ public:
 		}
 		return matrix(n, d, B);
 	}
-	matrix operator* (double t)
+	matrix operator* (type t)
 	{
 		vector <vector <type>> B(n);
 		for (int i = 0; i < n; i++)
@@ -45,7 +45,7 @@ public:
 		}
 		return matrix(n, m, B);
 	}
-	matrix operator/ (double t)
+	matrix operator/ (type t)
 	{
 		vector <vector <type>> B(n);
 		for (int i = 0; i < n; i++)
@@ -89,12 +89,13 @@ public:
 		}
 		return matrix(m, n, B);
 	}
+	// changed sqrt
 	type norm2()
 	{
 		type temp = 0;
 		for (int i = 0; i < n; i++)
-			temp += values[i][0] * values[i][0];
-		return sqrt(temp);
+			temp += abs(values[i][0]);
+		return temp;
 	}
 	matrix <type> get_first_column()
 	{
@@ -103,7 +104,7 @@ public:
 			T[i][0] = values[i][0];
 		return matrix(n, 1, T);
 	}
-	double det(vector <vector <double>> A = {})
+	type det(vector <vector <type>> A = {})
 	{
 		int a_size = A.size();
 		if (a_size == 0)
@@ -111,7 +112,7 @@ public:
 			A = values;
 			a_size = n;
 		}
-		double ans = 1;
+		type ans = 1;
 		for (int i = 0; i < a_size; i++)
 		{
 			int t = i;
@@ -125,19 +126,19 @@ public:
 			ans *= A[i][i];
 			for (int j = i + 1; j < a_size; j++)
 			{
-				double temp = A[j][i] / A[i][i];
+				type temp = A[j][i] / A[i][i];
 				for (int k = i; k < a_size; k++)
 					A[j][k] -= A[i][k] * temp;
 			}
 		}
 		return ans;
 	}
-	double alg_comp(int ti, int tj)
+	type alg_comp(int ti, int tj)
 	{
-		vector <vector <double>> B = values;
+		vector <vector <type>> B = values;
 		int t = B.size();
 		t = values.size();
-		vector <vector <double>> C(t - 1, vector <double>(t - 1));
+		vector <vector <type>> C(t - 1, vector <type>(t - 1));
 		for (int i = 0; i < t - 1; i++)
 			for (int j = 0; j < t - 1; j++)
 				C[i][j] = B[i + (i >= ti)][j + (j >= tj)];
@@ -153,21 +154,21 @@ public:
 		}
 		cout << '\n' << '\n';
 	}
-	static matrix <double> create_e(int n, int m = 1)
+	static matrix <type> create_e(int n, int m = 1)
 	{
-		vector <vector <double>> A(n);
+		vector <vector <type>> A(n);
 		for (int i = 0; i < n; i++)
 		{
 			A[i].resize(m, 0);
 			if (i < m)
 				A[i][i] = 1;
 		}
-		return matrix <double>(n, m, A);
+		return matrix <type>(n, m, A);
 	}
-	matrix <double> inv()
+	matrix <type> inv()
 	{
-		matrix <double> A(n, m, values);
-		matrix <double> B = matrix<double>::create_e(n, n);
+		matrix <type> A(n, m, values);
+		matrix <type> B = matrix<type>::create_e(n, n);
 		for (int i = 0; i < n; i++)
 		{
 			int t = i;
@@ -175,7 +176,7 @@ public:
 				t++;
 			swap(A[i], A[t]);
 			swap(B[i], B[t]);
-			double temp;
+			type temp;
 			for (int j = 0; j < n; j++)
 			{
 				if (j == i)
