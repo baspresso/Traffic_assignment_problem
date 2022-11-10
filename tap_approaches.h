@@ -12,9 +12,9 @@ public:
 	{
 		return free_flow_time + 0.15 * free_flow_time * pow(flow + extra_flow, 4) / pow(capacity, 4);
 	}
-	v_type delay_integ(v_type flow_on_link = -1.454555555)
+	v_type delay_integ(v_type flow_on_link = -1)
 	{
-		if (flow_on_link == -1.454555555)
+		if (flow_on_link == -1)
 			flow_on_link = flow;
 		return free_flow_time * (flow_on_link + 0.15 * capacity * pow(flow_on_link / capacity, 5) / 5);
 	}
@@ -38,6 +38,7 @@ private:
 	int origin, dest;
 	v_type demand, cur_delay, next_delay, next_delta;
 	vector <link <v_type>> &lnks;
+	bool fl;
 	const vector <vector <int>> &adj_list;
 	vector <vector <int>> cur_routes, next_routes;
 	unordered_map <int, v_type> cur_lnks_flow, next_lnks_flow;
@@ -174,7 +175,7 @@ private:
 	}
 public: 
 	od_pair(int &origin, int &dest, v_type &demand, vector <link <v_type>> &lnks, vector <vector <int>> &adj_list) :
-		origin(origin), dest(dest), demand(demand), lnks(lnks), adj_list(adj_list), cur_delay(0) { };
+		origin(origin), dest(dest), demand(demand), lnks(lnks), adj_list(adj_list), cur_delay(0), fl(false) { };
 	bool find_new_route()
 	{
 		update_cur_delay();
@@ -277,25 +278,49 @@ public:
 			}
 			swap(pos_routes[best_route], pos_routes[pos_routes.size() - 1]);
 			pos_routes.pop_back();
+			fl = true;
 		}
 	}
 	void implement_next_update()
 	{
-		unordered_set <int> cur_lnks, next_lnks;
+		unordered_set <int> all_lnks, cur_lnks, next_lnks;
 		for (int i = 0; i < cur_routes.size(); i++)
 			for (auto now : cur_routes[i])
+			{
 				cur_lnks.insert(now);
-		for (auto now : cur_lnks)
-			lnks[now].flow -= cur_lnks_flow[now];
+				all_lnks.insert(now);
+			}
 		for (int i = 0; i < next_routes.size(); i++)
 			for (auto now : next_routes[i])
+			{
 				next_lnks.insert(now);
-		for (auto now : next_lnks)
-			lnks[now].flow += next_lnks_flow[now];
-		cur_lnks_flow = next_lnks_flow;
-		cur_routes = next_routes;
+				all_lnks.insert(now);
+			}
+		v_type cur_res = 0, next_res = 0;
+		for (auto now : all_lnks)
+			cur_res += lnks[now].delay_integ();
+		for (auto now : all_lnks)
+			next_res += lnks[now].delay_integ(lnks[now].flow - cur_lnks_flow[now] + next_lnks_flow[now]);
+		if (cur_res >= next_res)
+		{
+			for (auto now : cur_lnks)
+				lnks[now].flow -= cur_lnks_flow[now];
+			for (auto now : next_lnks)
+				lnks[now].flow += next_lnks_flow[now];
+			cur_lnks_flow = next_lnks_flow;
+			cur_routes = next_routes;
+			cur_delay = next_delay;
+		}
 		update_next_data();
-		cur_delay = next_delay;
+		fl = false;
+	}
+	int routes_cnt()
+	{
+		return cur_routes.size();
+	}
+	bool get_fl()
+	{
+		return fl;
 	}
 };
 
@@ -439,6 +464,7 @@ public:
 		v_type delta = 0;
 		for (int t = 0; t < number_of_od; t++)
 			delta = max(delta, od_prs[t].get_cur_delta());
+		//cout << delta << '\n';
 		return delta;
 	}
 	bool fnd_routes()
@@ -450,13 +476,47 @@ public:
 	}
 	void solve_flow()
 	{
+		int num_threads = thread::hardware_concurrency() - 1, cnt_processed, cnt_not_processed;
+		//vector <bool> flgs(num_threads, true);
+		vector <thread> thr(num_threads);
+		vector <int> order(number_of_od);
+		vector <int> now_in_process(num_threads, 0);
+		for (int i = 0; i < number_of_od; i++)
+			order[i] = i;
 		while (fnd_routes())
+		{
+			vector <int> cur_task(num_threads, -1);
 			while (get_delta() > alpha)
-				for (auto& now : od_prs)
+			{
+				int cur_pos = 0, cnt_not_processed = number_of_od;
+				random_shuffle(order.begin(), order.end());
+				while (cnt_not_processed > 0)
 				{
-					now.calc_next_update();
-					now.implement_next_update();
+					for (int i = 0; i < num_threads; i++)
+						if ((cur_task[i] != -1) && od_prs[cur_task[i]].get_fl())
+						{
+							od_prs[cur_task[i]].implement_next_update();
+							cur_task[i] = -1;
+							cnt_not_processed--;
+						}
+					for (int i = 0; i < num_threads; i++)
+					{
+						while ((cur_pos < number_of_od) && od_prs[cur_pos].routes_cnt() == 1)
+						{
+							cur_pos++;
+							cnt_not_processed--;
+						}
+						if (cur_task[i] == -1 && (cur_pos < number_of_od))
+						{
+							cur_task[i] = cur_pos;
+							thr[i] = thread( &od_pair<v_type>::calc_next_update, &od_prs[cur_pos]);
+							thr[i].join();
+							cur_pos++;
+						}
+					}
 				}
+			}
+		}
 		show_stat();
 	}
 };
