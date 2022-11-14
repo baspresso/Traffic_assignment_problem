@@ -8,28 +8,34 @@ public:
 		v_type free_flow_time, v_type b, v_type power, v_type speed, v_type toll) :
 		init(init), term(term), type(type), capacity(capacity), length(length),
 		free_flow_time(free_flow_time), b(b), power(power), speed(speed), toll(toll) { };
-	v_type delay(v_type extra_flow = 0)
+	v_type delay(v_type temp_flow = -1)
 	{
-		return free_flow_time + 0.15 * free_flow_time * pow(flow + extra_flow, 4) / pow(capacity, 4);
+		if (temp_flow == -1)
+			temp_flow = flow;
+		return free_flow_time + 0.15 * free_flow_time * pow(temp_flow, 4) / pow(capacity, 4);
 	}
-	v_type delay_integ(v_type flow_on_link = -1)
+	v_type delay_integ(v_type temp_flow = -1)
 	{
-		if (flow_on_link == -1)
-			flow_on_link = flow;
-		return free_flow_time * (flow_on_link + 0.15 * capacity * pow(flow_on_link / capacity, 5) / 5);
+		if (temp_flow == -1)
+			temp_flow = flow;
+		return free_flow_time * (temp_flow + 0.15 * capacity * pow(temp_flow / capacity, 5) / 5);
 	}
-	v_type delay_der(v_type extra_flow = 0)
+	v_type delay_der(v_type temp_flow = -1)
 	{
-		return free_flow_time * 0.15 * 4 * pow((flow + extra_flow) / capacity, 3) / capacity;
+		if (temp_flow == -1)
+			temp_flow = flow;
+		return free_flow_time * 0.15 * 4 * pow(temp_flow / capacity, 3) / capacity;
 	}
-	static v_type get_links_delay(vector <link <v_type>>& lnks, vector <int>& lnk_list, v_type extra_flow = 0)
+	static v_type get_links_delay(vector <link <v_type>>& lnks, vector <int>& lnk_list)
 	{
 		v_type ans = 0;
 		for (auto now : lnk_list)
-			ans += lnks[now].delay(extra_flow);
+			ans += lnks[now].delay();
 		return ans;
 	}
 };
+
+mutex mtx, mtx_tasks;
 
 template <class v_type>
 class od_pair
@@ -43,20 +49,19 @@ private:
 	unordered_map <int, v_type> cur_lnks_flow, next_lnks_flow;
 	unordered_map <int, v_type> fxd_lnks_flow;
 	const v_type eps = 1e-6;
-	mutex mtx;
 	matrix <v_type> create_G(matrix <v_type>& temp_flow, map <int, int>& M_lnks_inv)
 	{
 		int n = temp_flow.size().first;
 		vector <vector <v_type>> Temp(n, vector <v_type>(n, 0));
 		for (int i = 0; i < n; i++)
-			Temp[i][i] = 1 / lnks[M_lnks_inv[i]].delay_der(temp_flow[i][0] - cur_lnks_flow[M_lnks_inv[i]]);
+			Temp[i][i] = 1 / lnks[M_lnks_inv[i]].delay_der(fxd_lnks_flow[M_lnks_inv[i]] + temp_flow[i][0]);
 		return matrix <v_type>(n, n, Temp);
 	}
 	matrix <v_type> create_g(matrix <v_type>& temp_flow, map <int, int>& M_lnks_inv)
 	{
 		matrix <v_type> g = temp_flow;
 		for (int i = 0; i < temp_flow.size().first; i++)
-			g[i][0] = lnks[M_lnks_inv[i]].delay(temp_flow[i][0] - cur_lnks_flow[M_lnks_inv[i]]);
+			g[i][0] = lnks[M_lnks_inv[i]].delay(fxd_lnks_flow[M_lnks_inv[i]] + temp_flow[i][0]);
 		return g;
 	}
 	tuple < map <int, int>, map <int, int>, map <int, int>, map <int, int>, matrix <v_type> > compression(vector <vector <int>>& routes)
@@ -110,7 +115,7 @@ private:
 		{
 			del_route = 0;
 			for (auto now : next_routes[0])
-				del_route += lnks[now].delay(next_lnks_flow[now] - cur_lnks_flow[now]);
+				del_route += lnks[now].delay(fxd_lnks_flow[now] + next_lnks_flow[now]);
 			del_min = del_route;
 			del_max = del_route;
 		}
@@ -118,7 +123,7 @@ private:
 		{
 			del_route = 0;
 			for (auto now : next_routes[i])
-				del_route += lnks[now].delay(next_lnks_flow[now] - cur_lnks_flow[now]);
+				del_route += lnks[now].delay(fxd_lnks_flow[now] + next_lnks_flow[now]);
 			del_min = min(del_min, del_route);
 			del_max = max(del_max, del_route);
 		}
@@ -131,11 +136,6 @@ private:
 		map <int, int> M_nodes = get<0>(comp), M_nodes_inv = get<1>(comp), M_edges = get<2>(comp), M_edges_inv = get<3>(comp);
 		matrix <v_type> A = get<4>(comp), G, A_trans, E, g, T;
 		int n = A.size().first, m = A.size().second;
-		vector <v_type> zero_load(m);
-		mtx.lock();
-		for (int i = 0; i < m; i++)
-			zero_load[i] = lnks[M_edge_inv[i]].flow - cur_lnks_flow[M_edges_inv[i]];
-		mtx.unlock();
 		matrix <v_type> temp_flow_now(m, 1), temp_flow_prev(m, 1);
 		for (int i = 0; i < next_routes.size(); i++)
 			for (auto& now : next_routes[i])
@@ -180,11 +180,17 @@ private:
 	}
 	void get_fxd_flow()
 	{
+		fxd_lnks_flow.clear();
 		mtx.lock();
+		//auto start = chrono::high_resolution_clock::now();
 		for (int i = 0; i < cur_routes.size(); i++)
 			for (auto now : cur_routes[i])
 				fxd_lnks_flow[now] = lnks[now].flow - cur_lnks_flow[now];
+		//auto end = chrono::high_resolution_clock::now();
+		//chrono::duration<float> duration = end - start;
+		//cout << "Duration of calc_next " << duration.count() << " sec \n";
 		mtx.unlock();
+
 	}
 public: 
 	od_pair(int &origin, int &dest, v_type &demand, vector <link <v_type>> &lnks, vector <vector <int>> &adj_list) :
@@ -277,7 +283,7 @@ public:
 			{
 				del_now = 0;
 				for (auto now : pos_routes[i])
-					del_now += lnks[now].delay(next_lnks_flow[now] - cur_lnks_flow[now]);
+					del_now += lnks[now].delay(fxd_lnks_flow[now] + next_lnks_flow[now]);
 				if ((del_now < del_best) || (del_best == -1))
 				{
 					best_route = i;
@@ -295,7 +301,6 @@ public:
 			//chrono::duration<float> duration = end - start;
 			//cout << "Duration of calc_next " << duration.count() << " sec \n";
 		}
-		fxd_lnks_flow.clear();
 	}
 	void implement_next_update()
 	{
@@ -317,7 +322,7 @@ public:
 		for (auto now : all_lnks)
 			cur_res += lnks[now].delay_integ();
 		for (auto now : all_lnks)
-			next_res += lnks[now].delay_integ(lnks[now].flow - cur_lnks_flow[now] + next_lnks_flow[now]);
+			next_res += lnks[now].delay_integ(fxd_lnks_flow[now] + next_lnks_flow[now]);
 		if (cur_res >= next_res)
 		{
 			for (auto now : cur_lnks)
@@ -328,6 +333,7 @@ public:
 			cur_routes = next_routes;
 			cur_delay = next_delay;
 		}
+		// ???
 		update_next_data();
 		//auto end = chrono::high_resolution_clock::now();
 		//chrono::duration<float> duration = end - start;
@@ -347,7 +353,7 @@ private:
 	vector <vector <int>> adj_list;							// links for each node
 	vector <od_pair <v_type>> od_prs;
 	int number_of_od, number_of_links, number_of_nodes;
-	queue <int> fr_thr, rd_to_imp;
+	queue <int> fr_thr, rd_to_imp, tasks;
 	string test;
 	v_type alpha = 1e-4;
 public:
@@ -472,8 +478,8 @@ public:
 		cout << "best ans: " << get_best_answer() << '\n';
 		cout << "obj function: " << objective_function() << '\n';
 		//for (int i = 0; i < number_of_links; i++)
-			//cout << "from: " << lnks[i].init + 1 << " to " << lnks[i].term + 1 << " volume " << lnks[i].flow << " cost " <<
-			//lnks[i].delay() << '\n';
+		//	cout << "from: " << lnks[i].init + 1 << " to " << lnks[i].term + 1 << " volume " << lnks[i].flow << " cost " <<
+		//	lnks[i].delay() << '\n';
 	}
 	v_type get_delta()
 	{
@@ -490,27 +496,30 @@ public:
 			fl = (now.find_new_route() || fl);
 		return fl;
 	}
-	/*void thr_next_calc(int cur_pos, int j)
+	void thr_calc()
 	{
-		od_prs[cur_pos].calc_next_update();
-		mtx.lock();
-		rd_to_imp.push(j);
-		mtx.unlock();
-
-	}*/
-	void thr_calc(int cur_pos, int j)
-	{
-		od_prs[cur_pos].calc_next_update();
-		mtx.lock();
-		od_prs[cur_pos].implement_next_update();
-		fr_thr.push(j);
-		mtx.unlock();
+		while (!tasks.empty())
+		{
+			int j = -1;
+			mtx_tasks.lock();
+			if (!tasks.empty())
+			{
+				j = tasks.front();
+				tasks.pop();
+			}
+			mtx_tasks.unlock();
+			if (j == -1)
+				continue;
+			od_prs[j].calc_next_update();
+			mtx.lock();
+			od_prs[j].implement_next_update();
+			mtx.unlock();
+		}
 	}
 	void solve_flow()
 	{
 		int num_threads = thread::hardware_concurrency() - 1, cnt_processed, cnt_not_processed;
-		//num_threads = 16;
-		//vector <bool> flgs(num_threads, true);
+		//num_threads = 1;
 		vector <thread> thr(num_threads);
 		vector <int> order(number_of_od);
 		vector <int> now_in_process(num_threads, 0);
@@ -519,39 +528,23 @@ public:
 		int cnt = 0;
 		while (fnd_routes())
 		{
-			//vector <int> cur_task(num_threads);
-			for (int i = 0; i < num_threads; i++)
-				fr_thr.push(i);
+			auto start = chrono::high_resolution_clock::now();
 			while (get_delta() > alpha)
 			{
-				int cur_pos = 0, cnt_not_processed = number_of_od;
 				random_shuffle(order.begin(), order.end());
-				for (int cur_pos = 0; cur_pos < number_of_od; cur_pos++)
-				{
-					if (od_prs[cur_pos].routes_cnt() == 1)
-						continue;
-					while (fr_thr.empty());
-						//this_thread::sleep_for(chrono::milliseconds(5));
-					int j = fr_thr.front();
-					fr_thr.pop();
-					if (fr_thr.size() < 6)
-					{
-						cnt++;
-						cout << '!';
-					}
-					if (cnt == 7)
-						cout << '?';
-					thr[j] = thread(&tap<v_type>::thr_calc, this, cur_pos, j);
-					//thr[j].join();
-				}
+				int cnt_not_processed = number_of_od;
+				for (int i = 0; i < number_of_od; i++)
+					if (od_prs[order[i]].routes_cnt() > 1)
+						tasks.push(order[i]);
 				for (int i = 0; i < num_threads; i++)
-					if (thr[i].joinable())
-						thr[i].join();
-				while (fr_thr.size() < num_threads);
-					//this_thread::sleep_for(chrono::milliseconds(5));
+					thr[i] = thread(&tap<v_type>::thr_calc, this);
+				for_each(thr.begin(), thr.end(), mem_fn(&thread::join));
 			}
 			while (!fr_thr.empty())
 				fr_thr.pop();
+			auto end = chrono::high_resolution_clock::now();
+			chrono::duration<float> duration = end - start;
+			cout << "Duration of balance " << duration.count() << " sec \n";
 			//show_stat();
 		}
 		show_stat();
