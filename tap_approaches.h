@@ -38,11 +38,12 @@ private:
 	int origin, dest;
 	v_type demand, cur_delay, next_delay, next_delta;
 	vector <link <v_type>> &lnks;
-	bool fl;
 	const vector <vector <int>> &adj_list;
 	vector <vector <int>> cur_routes, next_routes;
 	unordered_map <int, v_type> cur_lnks_flow, next_lnks_flow;
+	unordered_map <int, v_type> fxd_lnks_flow;
 	const v_type eps = 1e-6;
+	mutex mtx;
 	matrix <v_type> create_G(matrix <v_type>& temp_flow, map <int, int>& M_lnks_inv)
 	{
 		int n = temp_flow.size().first;
@@ -130,8 +131,12 @@ private:
 		map <int, int> M_nodes = get<0>(comp), M_nodes_inv = get<1>(comp), M_edges = get<2>(comp), M_edges_inv = get<3>(comp);
 		matrix <v_type> A = get<4>(comp), G, A_trans, E, g, T;
 		int n = A.size().first, m = A.size().second;
-
-		matrix <v_type>  temp_flow_now(m, 1), temp_flow_prev(m, 1);
+		vector <v_type> zero_load(m);
+		mtx.lock();
+		for (int i = 0; i < m; i++)
+			zero_load[i] = lnks[M_edge_inv[i]].flow - cur_lnks_flow[M_edges_inv[i]];
+		mtx.unlock();
+		matrix <v_type> temp_flow_now(m, 1), temp_flow_prev(m, 1);
 		for (int i = 0; i < next_routes.size(); i++)
 			for (auto& now : next_routes[i])
 				temp_flow_now[M_edges[now]][0] += demand / next_routes.size();
@@ -173,9 +178,17 @@ private:
 		}
 		cur_delay = del_min;
 	}
+	void get_fxd_flow()
+	{
+		mtx.lock();
+		for (int i = 0; i < cur_routes.size(); i++)
+			for (auto now : cur_routes[i])
+				fxd_lnks_flow[now] = lnks[now].flow - cur_lnks_flow[now];
+		mtx.unlock();
+	}
 public: 
 	od_pair(int &origin, int &dest, v_type &demand, vector <link <v_type>> &lnks, vector <vector <int>> &adj_list) :
-		origin(origin), dest(dest), demand(demand), lnks(lnks), adj_list(adj_list), cur_delay(0), fl(false) { };
+		origin(origin), dest(dest), demand(demand), lnks(lnks), adj_list(adj_list), cur_delay(0) { };
 	bool find_new_route()
 	{
 		update_cur_delay();
@@ -222,13 +235,11 @@ public:
 			reverse(new_route.begin(), new_route.end());
 			cur_routes.push_back(new_route);
 			if (cur_routes.size() == 1)
-			{
 				for (auto now : cur_routes[0])
 				{
 					lnks[now].flow += demand;
 					cur_lnks_flow[now] = demand;
 				}
-			}
 			return true;
 		}
 		return false;
@@ -252,10 +263,12 @@ public:
 	}
 	void calc_next_update()
 	{
+		//auto start = chrono::high_resolution_clock::now();
 		vector <vector <int>> pos_routes = cur_routes;
 		next_routes = {};
 		next_delay = -1;
 		next_lnks_flow = cur_lnks_flow;
+		get_fxd_flow();
 		while (!pos_routes.empty())
 		{
 			int best_route = 0;
@@ -278,11 +291,15 @@ public:
 			}
 			swap(pos_routes[best_route], pos_routes[pos_routes.size() - 1]);
 			pos_routes.pop_back();
-			fl = true;
+			//auto end = chrono::high_resolution_clock::now();
+			//chrono::duration<float> duration = end - start;
+			//cout << "Duration of calc_next " << duration.count() << " sec \n";
 		}
+		fxd_lnks_flow.clear();
 	}
 	void implement_next_update()
 	{
+		//auto start = chrono::high_resolution_clock::now();
 		unordered_set <int> all_lnks, cur_lnks, next_lnks;
 		for (int i = 0; i < cur_routes.size(); i++)
 			for (auto now : cur_routes[i])
@@ -312,15 +329,13 @@ public:
 			cur_delay = next_delay;
 		}
 		update_next_data();
-		fl = false;
+		//auto end = chrono::high_resolution_clock::now();
+		//chrono::duration<float> duration = end - start;
+		//cout << "Duration of implement " << duration.count() << " sec \n";
 	}
 	int routes_cnt()
 	{
 		return cur_routes.size();
-	}
-	bool get_fl()
-	{
-		return fl;
 	}
 };
 
@@ -332,6 +347,7 @@ private:
 	vector <vector <int>> adj_list;							// links for each node
 	vector <od_pair <v_type>> od_prs;
 	int number_of_od, number_of_links, number_of_nodes;
+	queue <int> fr_thr, rd_to_imp;
 	string test;
 	v_type alpha = 1e-4;
 public:
@@ -455,9 +471,9 @@ public:
 	{
 		cout << "best ans: " << get_best_answer() << '\n';
 		cout << "obj function: " << objective_function() << '\n';
-		for (int i = 0; i < number_of_links; i++)
-			cout << "from: " << lnks[i].init + 1 << " to " << lnks[i].term + 1 << " volume " << lnks[i].flow << " cost " <<
-			lnks[i].delay() << '\n';
+		//for (int i = 0; i < number_of_links; i++)
+			//cout << "from: " << lnks[i].init + 1 << " to " << lnks[i].term + 1 << " volume " << lnks[i].flow << " cost " <<
+			//lnks[i].delay() << '\n';
 	}
 	v_type get_delta()
 	{
@@ -474,48 +490,69 @@ public:
 			fl = (now.find_new_route() || fl);
 		return fl;
 	}
+	/*void thr_next_calc(int cur_pos, int j)
+	{
+		od_prs[cur_pos].calc_next_update();
+		mtx.lock();
+		rd_to_imp.push(j);
+		mtx.unlock();
+
+	}*/
+	void thr_calc(int cur_pos, int j)
+	{
+		od_prs[cur_pos].calc_next_update();
+		mtx.lock();
+		od_prs[cur_pos].implement_next_update();
+		fr_thr.push(j);
+		mtx.unlock();
+	}
 	void solve_flow()
 	{
 		int num_threads = thread::hardware_concurrency() - 1, cnt_processed, cnt_not_processed;
+		//num_threads = 16;
 		//vector <bool> flgs(num_threads, true);
 		vector <thread> thr(num_threads);
 		vector <int> order(number_of_od);
 		vector <int> now_in_process(num_threads, 0);
 		for (int i = 0; i < number_of_od; i++)
 			order[i] = i;
+		int cnt = 0;
 		while (fnd_routes())
 		{
-			vector <int> cur_task(num_threads, -1);
+			//vector <int> cur_task(num_threads);
+			for (int i = 0; i < num_threads; i++)
+				fr_thr.push(i);
 			while (get_delta() > alpha)
 			{
 				int cur_pos = 0, cnt_not_processed = number_of_od;
 				random_shuffle(order.begin(), order.end());
-				while (cnt_not_processed > 0)
+				for (int cur_pos = 0; cur_pos < number_of_od; cur_pos++)
 				{
-					for (int i = 0; i < num_threads; i++)
-						if ((cur_task[i] != -1) && od_prs[cur_task[i]].get_fl())
-						{
-							od_prs[cur_task[i]].implement_next_update();
-							cur_task[i] = -1;
-							cnt_not_processed--;
-						}
-					for (int i = 0; i < num_threads; i++)
+					if (od_prs[cur_pos].routes_cnt() == 1)
+						continue;
+					while (fr_thr.empty());
+						//this_thread::sleep_for(chrono::milliseconds(5));
+					int j = fr_thr.front();
+					fr_thr.pop();
+					if (fr_thr.size() < 6)
 					{
-						while ((cur_pos < number_of_od) && od_prs[cur_pos].routes_cnt() == 1)
-						{
-							cur_pos++;
-							cnt_not_processed--;
-						}
-						if (cur_task[i] == -1 && (cur_pos < number_of_od))
-						{
-							cur_task[i] = cur_pos;
-							thr[i] = thread( &od_pair<v_type>::calc_next_update, &od_prs[cur_pos]);
-							thr[i].join();
-							cur_pos++;
-						}
+						cnt++;
+						cout << '!';
 					}
+					if (cnt == 7)
+						cout << '?';
+					thr[j] = thread(&tap<v_type>::thr_calc, this, cur_pos, j);
+					//thr[j].join();
 				}
+				for (int i = 0; i < num_threads; i++)
+					if (thr[i].joinable())
+						thr[i].join();
+				while (fr_thr.size() < num_threads);
+					//this_thread::sleep_for(chrono::milliseconds(5));
 			}
+			while (!fr_thr.empty())
+				fr_thr.pop();
+			//show_stat();
 		}
 		show_stat();
 	}
