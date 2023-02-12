@@ -5,19 +5,23 @@ private:
 	int n, m;
 	vector <vector <type>> values;
 public:
-	matrix(int k1, int k2, vector <vector <type>>& A): n(k1), m(k2), values(A)
+	matrix(int k1, int k2, const vector <vector <type>>& A) : n(k1), m(k2), values(A)
 	{	}
-	matrix(int k1, int k2): n(k1), m(k2)
+	matrix(int k1, int k2) : n(k1), m(k2)
 	{
 		values = vector <vector <type>>(n, vector <type>(m, 0));
 	}
 	matrix() : n(0), m(0)
 	{ }
-	pair <int, int> size()
+	pair <int, int> size() const
 	{
 		return { n, m };
 	}
 	vector <type>& operator[](int i)
+	{
+		return values[i];
+	}
+	const vector <type> & operator[](int i) const
 	{
 		return values[i];
 	}
@@ -56,27 +60,35 @@ public:
 		}
 		return matrix(n, m, B);
 	}
-	matrix operator+ (matrix A)
+	const matrix operator+ (const matrix& A)
 	{
-		vector <vector <type>> B(n);
+		matrix <type> B(n, m);
 		for (int i = 0; i < n; i++)
-		{
-			B[i].resize(m, 0);
 			for (int j = 0; j < m; j++)
-				B[i][j] = values[i][j] + A[i][j];
-		}
-		return matrix(n, m, B);
+				B[i][j] = A[i][j] + this->values[i][j];
+		return B;
 	}
-	matrix operator- (matrix A)
+	matrix operator += (const matrix& A)
 	{
-		vector <vector <type>> B(n);
 		for (int i = 0; i < n; i++)
-		{
-			B[i].resize(m, 0);
 			for (int j = 0; j < m; j++)
-				B[i][j] = values[i][j] - A[i][j];
-		}
-		return matrix(n, m, B);
+				this->values[i][j] += A[i][j];
+		return *this;
+	}
+	const matrix operator- (const matrix& A)
+	{
+		matrix <type> B(n, m);
+		for (int i = 0; i < n; i++)
+			for (int j = 0; j < m; j++)
+				B[i][j] = this->values[i][j] - A[i][j];
+		return B;
+	}
+	matrix operator-= (const matrix& A)
+	{
+		for (int i = 0; i < n; i++)
+			for (int j = 0; j < m; j++)
+				values[i][j] -= A[i][j];
+		return *this;
 	}
 	matrix trans()
 	{
@@ -103,6 +115,13 @@ public:
 		for (int i = 0; i < n; i++)
 			T[i][0] = values[i][0];
 		return matrix(n, 1, T);
+	}
+	matrix <type> get_column(int j)
+	{
+		matrix <type> x(n, 1);
+		for (int i = 0; i < n; i++)
+			x[i][0] = values[i][j];
+		return x;
 	}
 	type det(vector <vector <type>> A = {})
 	{
@@ -133,7 +152,7 @@ public:
 		}
 		return ans;
 	}
-	type alg_comp(int ti, int tj)
+	type alg_comp(const int ti, const int tj)
 	{
 		vector <vector <type>> B = values;
 		int t = B.size();
@@ -154,7 +173,7 @@ public:
 		}
 		cout << '\n' << '\n';
 	}
-	static matrix <type> create_e(int n, int m = 1)
+	static matrix <type> create_e(const int n, const int m = 1)
 	{
 		vector <vector <type>> A(n);
 		for (int i = 0; i < n; i++)
@@ -164,6 +183,13 @@ public:
 				A[i][i] = 1;
 		}
 		return matrix <type>(n, m, A);
+	}
+	void concatenate(const matrix <type>& A)
+	{
+		m += A.size().second;
+		for (int i = 0; i < n; i++)
+			for (int j = 0; j < A.size().second; j++)
+				values[i].push_back(A[i][j]);
 	}
 	matrix <type> inv()
 	{
