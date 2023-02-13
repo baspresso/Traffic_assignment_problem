@@ -118,7 +118,7 @@ public:
 					v_type a = rng(), b = rng();
 					if (a > b)
 						swap(a, b);
-					solution[i][0] = a / b * limitation;
+					solution[i][0] = a / b * limitation * ((rng() % 2 == 0) ? 1 : -1);
 				}
 			b_mod -= A * solution;
 			matrix <v_type> temp = gaussian_elimination(A_mod, b_mod);
