@@ -8,33 +8,31 @@ public:
 		v_type free_flow_time, v_type b, v_type power, v_type speed, v_type toll) :
 		init(init), term(term), type(type), capacity(capacity), length(length),
 		free_flow_time(free_flow_time), b(b), power(power), speed(speed), toll(toll) { };
-	v_type delay(v_type temp_flow)
+	v_type delay(const v_type temp_flow)
 	{
-		if (temp_flow == -1)
-			temp_flow = flow;
-		return free_flow_time + 0.15 * free_flow_time * pow(temp_flow, 4) / pow(capacity, 4);
+		return 0.15 * free_flow_time * pow(temp_flow, 3) / pow(capacity, 3);
 	}
 	v_type delay()
 	{
-		v_type temp_flow = flow;
-		return free_flow_time + 0.15 * free_flow_time * pow(temp_flow, 4) / pow(capacity, 4);
+		return this->delay(this->flow);
 	}
-	v_type delay_integ(v_type temp_flow = -1)
+	v_type delay_integ(const v_type temp_flow)
 	{
-		if (temp_flow == -1)
-			temp_flow = flow;
 		return free_flow_time * (temp_flow + 0.15 * capacity * pow(temp_flow / capacity, 5) / 5);
 	}
-	v_type delay_der(v_type temp_flow)
+	v_type delay_integ()
 	{
-		return free_flow_time * 0.15 * 4 * pow(temp_flow / capacity, 3) / capacity;
+		return this->delay_integ(this->flow);
+	}
+	v_type delay_der(const v_type temp_flow)
+	{
+		return 0.15 * free_flow_time * 3 * pow(temp_flow / capacity, 2) / capacity;
 	}
 	v_type delay_der()
 	{
-		v_type temp_flow = flow;	
-		return free_flow_time * 0.15 * 4 * pow(temp_flow / capacity, 3) / capacity;
+		return this->delay_der(this->flow);
 	}
-	static v_type get_links_delay(vector <link <v_type>>& lnks, vector <int>& lnk_list)
+	static v_type get_links_delay(const vector <link <v_type>>& lnks, const vector <int>& lnk_list)
 	{
 		v_type ans = 0;
 		for (auto now : lnk_list)
@@ -147,7 +145,7 @@ class emf_problem
 private:
 	int emf, number_of_links, number_of_nodes, number_of_zones;
 	const v_type eps = 1e-6;
-	v_type demand;
+	matrix <v_type> demand;
 	vector <link <v_type>> lnks;
 	string test;
 	matrix <v_type> create_G()
@@ -187,10 +185,8 @@ private:
 	matrix <v_type> create_b(int v)
 	{
 		matrix <v_type> b(number_of_nodes - 1, 1);
-		if (v < emf)
-			b[emf - 1][0] = demand;
-		else
-			b[emf][0] = demand;
+		for (int i = 0; i < number_of_nodes - 1; i++)
+			b[i][0] = demand[i + (i >= v)][0];
 		return b;
 	}
 	bool isNumber(char c)
@@ -245,18 +241,10 @@ private:
 		while (getline(in, line))
 			get_link(line);
 		in = ifstream(test + "_info.txt");
-		getline(in, line);
-		int i = 0;
-		number_of_zones = get_value_int(i, line);
-		getline(in, line);
-		i = 0;
-		number_of_nodes = get_value_int(i, line);
-		i = 0;
-		getline(in, line);
-		emf = get_value_int(i, line) - 1;
-		i = 0;
-		getline(in, line);
-		demand = get_value_int(i, line);
+		in >> number_of_zones >> number_of_nodes;
+		demand = matrix <v_type>(number_of_nodes, 1);
+		for (int j = 0; j < number_of_nodes; j++)
+			in >> demand[j][0];
 	}
 public:
 	emf_problem(const string& test) : number_of_links(0), test(test)
@@ -266,9 +254,10 @@ public:
 	void solve_flow()
 	{
 		mt19937 rng(chrono::steady_clock::now().time_since_epoch().count());
-		int v = rng() % number_of_nodes;
-		while (v == emf)
-			v = rng() % number_of_nodes;
+		int v = -1;
+		for (int i = 0; i < number_of_nodes; i++)
+			if (demand[i][0] != 0)
+				v = i;
 		matrix <v_type> A = create_A(v);
 		matrix <v_type> b = create_b(v);
 		lin_equation <v_type> lin_sys(A, b);
