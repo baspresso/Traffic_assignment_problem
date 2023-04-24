@@ -1,6 +1,7 @@
 namespace traffic_assignment {
-template <class T>                    // value type
+template <class T>
 struct Link {
+using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
 public:
   int init, term, type;
   T capacity, length, free_flow_time, b, power, speed, toll, flow;
@@ -33,6 +34,7 @@ public:
 
 template <class T>
 class OriginDestinationPair {
+  using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
 private:
   int origin_, dest_;
   T demand_, current_delay_, next_delay_, next_delta_;
@@ -42,24 +44,24 @@ private:
   unordered_map <int, T> current_links_flow_, next_links_flow_;
   unordered_map <int, T> fixed_links_flow_;
   const T eps_ = 1e-6;
-  matrix <T> CreateG(matrix <T>& temp_flow, map <int, int>& M_links_inv) {
-    int n = temp_flow.size().first;
-    vector <vector <T>> Temp(n, vector <T>(n, 0));  
+  MatrixXd CreateG(MatrixXd& temp_flow, unordered_map <int, int>& mapping_links_inv) {
+    int n = temp_flow.rows();
+    MatrixXd g(n, n);
+    g = MatrixXd::Identity(n, n);
     for (int i = 0; i < n; i++)
-      Temp[i][i] = 1 / links_[M_links_inv[i]].DelayDer(fixed_links_flow_[M_links_inv[i]] + temp_flow[i][0]);
-    return matrix <T>(n, n, Temp);
-  }
-  matrix <T> CreateDelayColumn(matrix <T>& temp_flow, map <int, int>& M_links_inv) {
-    matrix <T> g = temp_flow;
-    for (int i = 0; i < temp_flow.size().first; i++)
-      g[i][0] = links_[M_links_inv[i]].Delay(fixed_links_flow_[M_links_inv[i]] + temp_flow[i][0]);
+      g(i, i) = 1 / links_[mapping_links_inv[i]].DelayDer(fixed_links_flow_[mapping_links_inv[i]] + temp_flow(i, 0));
     return g;
   }
-  tuple < map <int, int>, map <int, int>, map <int, int>, map <int, int>, matrix <T> > Compression(const vector <vector <int>>& routes) {
+  MatrixXd CreateDelayColumn(MatrixXd& temp_flow, unordered_map <int, int>& M_links_inv) {
+    MatrixXd delay_column(temp_flow.rows(), 1);
+    for (int i = 0; i < temp_flow.rows(); i++)
+      delay_column(i, 0) = links_[M_links_inv[i]].Delay(fixed_links_flow_[M_links_inv[i]] + temp_flow(i, 0));
+    return delay_column;
+  }
+  tuple < unordered_map <int, int>, unordered_map <int, int>, unordered_map <int, int>, unordered_map <int, int>, MatrixXd > Compression(const vector <vector <int>>& routes) {
     int count = 0;
     set <int> actually_used_links, actually_used_nodes;
-    map <int, int> mapping_nodes, mapping_nodes_inv, mapping_edges, mapping_edges_inv;
-    matrix <T> A;
+    unordered_map <int, int> mapping_nodes, mapping_nodes_inv, mapping_edges, mapping_edges_inv;
     for (int i = 0; i < routes.size(); i++) {
       for (auto now : routes[i])
         if (actually_used_links.find(now) == actually_used_links.end()) {
@@ -80,18 +82,18 @@ private:
     for (auto now : actually_used_nodes)
       if (mapping_nodes[now] == n)
         swap(mapping_nodes[origin_], mapping_nodes[now]);
-    A = matrix <T>(n, m);
+    MatrixXd compressed_adjacency_matrix = MatrixXd::Zero(n, m);
     count = 0;
     for (auto now : actually_used_links) {
       mapping_edges[now] = count;
       mapping_edges_inv[count] = now;
       if (links_[now].init != origin_)
-        A[mapping_nodes[links_[now].init]][count] = 1;
+        compressed_adjacency_matrix(mapping_nodes[links_[now].init], count) = 1;
       if (links_[now].term != origin_)
-        A[mapping_nodes[links_[now].term]][count] = -1;
+        compressed_adjacency_matrix(mapping_nodes[links_[now].term], count) = -1;
       count++;
     }
-    return { mapping_nodes, mapping_nodes_inv, mapping_edges, mapping_edges_inv, A };
+    return { mapping_nodes, mapping_nodes_inv, mapping_edges, mapping_edges_inv, compressed_adjacency_matrix };
   }
   void UpdateNextData() {
     T delay_min = 1e9, delay_max = 0, delay_route;
@@ -113,33 +115,28 @@ private:
     next_delta_ = delay_max - delay_min;
   }
   void BalanceNextRoutes() {
-    tuple <map <int, int>, map <int, int>, map <int, int>, map <int, int>, matrix <T> > comp = Compression(next_routes_);
-    map <int, int> mapping_nodes = get<0>(comp), mapping_nodes_inv = get<1>(comp), mapping_edges = get<2>(comp), mapping_edges_inv = get<3>(comp);
-    matrix <T> A = get<4>(comp), G, A_trans, E, g, t;
-    int n = A.size().first, m = A.size().second;
-    matrix <T> temp_flow_now(m, 1), temp_flow_prev(m, 1);
+    tuple <unordered_map <int, int>, unordered_map <int, int>, unordered_map <int, int>, unordered_map <int, int>, MatrixXd > comp = Compression(next_routes_);
+    unordered_map <int, int> mapping_nodes = get<0>(comp), mapping_nodes_inv = get<1>(comp), mapping_edges = get<2>(comp), mapping_edges_inv = get<3>(comp);
+    MatrixXd compressed_adjacency_matrix = get<4>(comp);
+    int n = compressed_adjacency_matrix.rows(), m = compressed_adjacency_matrix.cols();
+    MatrixXd temp_flow_now(m, 1), temp_flow_prev(m, 1);
     for (int i = 0; i < next_routes_.size(); i++)
       for (auto& now : next_routes_[i])
-        temp_flow_now[mapping_edges[now]][0] += demand_ / next_routes_.size();
+        temp_flow_now(mapping_edges[now], 0) += demand_ / next_routes_.size();
     next_delta_ = eps_ + 1;
     next_links_flow_.clear();
     for (int i = 0; i < m; i++)
-      next_links_flow_[mapping_edges_inv[i]] = temp_flow_now[i][0];
+      next_links_flow_[mapping_edges_inv[i]] = temp_flow_now(i, 0);
     UpdateNextData();
     while (next_delta_ > eps_) {
       temp_flow_prev = temp_flow_now;
-      G = CreateG(temp_flow_now, mapping_edges_inv);
-      A_trans = A.trans();
-      E = matrix<T>::create_e(m, m);
-      g = CreateDelayColumn(temp_flow_now, mapping_edges_inv);
-      t = (A * G * A_trans).inv();
-      t = A_trans * t * A * G;
-      t = E - t;
-      t = G * t * g;
-      temp_flow_now = temp_flow_now - t;
+      MatrixXd g = CreateG(temp_flow_now, mapping_edges_inv);
+      temp_flow_now -= g * (MatrixXd::Identity(m, m) - compressed_adjacency_matrix.transpose() * 
+        (compressed_adjacency_matrix * g * compressed_adjacency_matrix.transpose()).inverse() *
+        compressed_adjacency_matrix * g) * CreateDelayColumn(temp_flow_now, mapping_edges_inv);
       next_links_flow_.clear();
       for (int i = 0; i < m; i++)
-        next_links_flow_[mapping_edges_inv[i]] = temp_flow_now[i][0];
+        next_links_flow_[mapping_edges_inv[i]] = temp_flow_now(i, 0);
       UpdateNextData();
     }
   }
@@ -263,7 +260,7 @@ public:
       //cout << "Duration of calc_next " << duration.count() << " sec \n";
     }
   }
-  bool ImplementNextUpdate() {
+  bool ImplementNextUpdate(mutex& mtx) {
     //auto start = chrono::high_resolution_clock::now();
     unordered_set <int> all_links, cur_links, next_links;
     for (int i = 0; i < current_routes_.size(); i++)
@@ -277,6 +274,8 @@ public:
         all_links.insert(now);
       }
     T current_result = 0, next_result = 0;
+    bool result;
+    mtx.lock();
     for (auto now : all_links)
       current_result += links_[now].DelayInteg();
     for (auto now : all_links)
@@ -290,10 +289,12 @@ public:
       current_links_flow_ = next_links_flow_;
       current_routes_ = next_routes_;
       current_delay_ = next_delay_;
-      return true;
+      result = true;
     }
     else
-      return false;
+      result = false;
+    mtx.unlock();
+    return result;
   }
   int RoutesCount() {
     return current_routes_.size();
@@ -302,15 +303,15 @@ public:
 
 template <typename T>                    // value type
 class RouteBasedApproach {
+using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
 private:
   vector <Link <T>> links_;
   vector <vector <int>> adjacency_list_;              // Links for each node
   vector <OriginDestinationPair <T>> origin_destination_pairs_;
   int number_of_origin_destination_pairs_, number_of_links_, number_of_nodes_, number_of_zones_;
   queue <int> ready_to_implement_, tasks_;
-  int tasks_count;
-  string test;
-  T alpha = 1e-4;
+  string test_name_;
+  T alpha_ = 1e-4;
   mutex mtx_, mtx_tasks_;
 public:
   bool IsNumber(char c) {
@@ -382,10 +383,10 @@ public:
   }
   void GetData() {
     string line;
-    ifstream in(test + "_net.txt");
+    ifstream in(test_name_ + "_net.txt");
     while (getline(in, line))
       GetLink(line);
-    in = ifstream(test + "_trips.txt");
+    in = ifstream(test_name_ + "_trips.txt");
     getline(in, line);
     int i = 0;
     number_of_zones_ = GetValueInt(i, line);
@@ -396,7 +397,7 @@ public:
       GetOriginDestinationPair(in);
     number_of_origin_destination_pairs_ = origin_destination_pairs_.size();
   }
-  RouteBasedApproach(string tn) : number_of_links_(0), number_of_origin_destination_pairs_(0), test(tn) {
+  RouteBasedApproach(string test_name_) : number_of_links_(0), number_of_origin_destination_pairs_(0), test_name_(test_name_) {
     GetData();
     adjacency_list_.resize(number_of_nodes_);
     for (int i = 0; i < number_of_links_; i++)
@@ -411,7 +412,7 @@ public:
   T GetBestAnswer() {
     T ans = 0, flow_on_link;
     string line;
-    ifstream in(test + "_flow.txt");
+    ifstream in(test_name_ + "_flow.txt");
     int j = 0;
     for (int i = 0; i < number_of_links_; i++) {
       getline(in, line);
@@ -454,9 +455,7 @@ public:
       if (j == -1)
         continue;
       origin_destination_pairs_[j].CalculateNextUpdate(mtx_);
-      mtx_.lock();
-      origin_destination_pairs_[j].ImplementNextUpdate();
-      mtx_.unlock();
+      origin_destination_pairs_[j].ImplementNextUpdate(mtx_);
     }
   }
   void SolveFlow() {
@@ -470,7 +469,7 @@ public:
     int count = 0;
     while (NewRouteFound()) {
       auto start = chrono::high_resolution_clock::now();
-      while (GetDelta() > alpha) {
+      while (GetDelta() > alpha_) {
         random_shuffle(tasks_order.begin(), tasks_order.end());
         for (int i = 0; i < number_of_origin_destination_pairs_; i++)
           if (origin_destination_pairs_[tasks_order[i]].RoutesCount() > 1)
