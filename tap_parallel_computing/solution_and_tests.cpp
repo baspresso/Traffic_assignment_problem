@@ -33,8 +33,7 @@ void TrafficAssignmentTest(string test) {
 void TrafficAssignmentTest_solutions() {
   string line;
   ifstream in("tests.txt");
-  while (getline(in, line))
-  {
+  while (getline(in, line)) {
     auto start = chrono::high_resolution_clock::now();
     cout << "test: " << line << '\n';
     //TrafficAssignmentTest<tap_tr_equilibrium>(line);
@@ -42,12 +41,10 @@ void TrafficAssignmentTest_solutions() {
     auto end = chrono::high_resolution_clock::now();
     chrono::duration<float> duration = end - start;
     cout << "Duration: " << duration.count() << " sec \n";
-
   }
 }
 
-int main()
-{
+int main() {
   std::cout << std::setprecision(15);
   TrafficAssignmentTest_solutions();
   return 0;
