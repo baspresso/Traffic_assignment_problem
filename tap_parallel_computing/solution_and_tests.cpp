@@ -20,12 +20,9 @@ using namespace std;
 
 #include <math/wide_decimal/decwide_t.h>
 #include <Eigen/Dense>
-
-using dec101_t = math::wide_decimal::decwide_t<INT32_C(101), std::uint32_t, void>;
-
-#include "class_matrix.h"
 #include "tap_approaches.h"
 
+using dec101_t = math::wide_decimal::decwide_t<INT32_C(101), std::uint32_t, void>;
 
 template <typename Method>
 void TrafficAssignmentTest(string test) {
