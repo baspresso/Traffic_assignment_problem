@@ -24,6 +24,11 @@ public:
       temp_flow = flow;
     return free_flow_time * 0.15 * 4 * pow(temp_flow / capacity, 3) / capacity;
   }
+  T DelaySecondDer(T temp_flow = -1) {
+    if (temp_flow == -1)
+      temp_flow = flow;
+    return free_flow_time * 0.15 * 12 * pow(temp_flow, 2) / pow(capacity, 4);
+  }
   static T GetLinksDelay(vector <Link <T>>& links, const vector <int>& links_list) {
     T ans = 0;
     for (auto now : links_list)
@@ -167,7 +172,7 @@ private:
 public: 
   OriginDestinationPair(int &origin, int &dest, T &demand, vector <Link <T>> &links, vector <vector <int>> &adjacency_list) :
     origin_(origin), dest_(dest), demand_(demand), links_(links), adjacency_list_(adjacency_list), current_delay_(0) { };
-  bool FindNewRoute() {
+  vector <int> BestRoute() {
     UpdateCurrentDelay();
     //cout << current_delay_ << '\n';
     priority_queue <pair <T, int>, vector <pair <T, int>>, greater <pair <T, int>>> q;
@@ -196,16 +201,19 @@ public:
           q.push({ temp + links_[now].Delay(), now });
     }
     used_link[dest_] = q.top().second;
-    T delay_cur_route = q.top().first;
-    if (delay_cur_route < current_delay_ || current_routes_.size() == 0) {
-      current_delay_ = delay_cur_route;
-      int now = dest_;
-      vector <int> new_route;
-      while (now != origin_) {
-        new_route.push_back(used_link[now]);
-        now = links_[used_link[now]].init;
-      }
-      reverse(new_route.begin(), new_route.end());
+    int now = dest_;
+    vector <int> new_route;
+    while (now != origin_) {
+      new_route.push_back(used_link[now]);
+      now = links_[used_link[now]].init;
+    }
+    reverse(new_route.begin(), new_route.end());
+    return new_route;
+  }
+  bool FindNewRoute() {
+    vector <int> new_route = BestRoute();
+    if (Link<T>::GetLinksDelay(links_, new_route) < current_delay_ || current_routes_.size() == 0) {
+      current_delay_ = Link<T>::GetLinksDelay(links_, new_route);
       current_routes_.push_back(new_route);
       if (current_routes_.size() == 1)
         for (auto now : current_routes_[0]) {
@@ -299,21 +307,21 @@ public:
   int RoutesCount() {
     return current_routes_.size();
   }
+  T GetDemand() {
+    return demand_;
+  }
 };
 
-template <typename T>                    // value type
-class RouteBasedApproach {
+template <typename T> 
+class TrafficAssignmentApproach {
 using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
-private:
+protected:
+  T best_ans_;
   vector <Link <T>> links_;
-  vector <vector <int>> adjacency_list_;              // Links for each node
+  vector <vector <int>> adjacency_list_;                    // Links for each node
   vector <OriginDestinationPair <T>> origin_destination_pairs_;
   int number_of_origin_destination_pairs_, number_of_links_, number_of_nodes_, number_of_zones_;
-  queue <int> ready_to_implement_, tasks_;
   string test_name_;
-  T alpha_ = 1e-4;
-  mutex mtx_, mtx_tasks_;
-public:
   bool IsNumber(char c) {
     return c >= '0' && c <= '9';
   }
@@ -397,17 +405,16 @@ public:
       GetOriginDestinationPair(in);
     number_of_origin_destination_pairs_ = origin_destination_pairs_.size();
   }
-  RouteBasedApproach(string test_name_) : number_of_links_(0), number_of_origin_destination_pairs_(0), test_name_(test_name_) {
-    GetData();
-    adjacency_list_.resize(number_of_nodes_);
-    for (int i = 0; i < number_of_links_; i++)
-      adjacency_list_[links_[i].init].push_back(i);
-  }
-  T ObjectiveFunction() {
-    T ans = 0;
-    for (int i = 0; i < number_of_links_; i++)
-      ans += links_[i].DelayInteg();
-    return ans;
+  T RelativeGap() {
+    T result = 1, numerator = 0, denominator = 0; 
+    for (auto& od_pair : origin_destination_pairs_) {
+      vector <int> best_route = od_pair.BestRoute();
+      numerator += od_pair.GetDemand() * Link<T>::GetLinksDelay(links_, best_route);
+    }
+    for (auto& link : links_)
+      denominator += link.flow * link.Delay();
+    result -= numerator / denominator;
+    return result;
   }
   T GetBestAnswer() {
     T ans = 0, flow_on_link;
@@ -423,28 +430,57 @@ public:
     }
     return ans;
   }
+public:
+  TrafficAssignmentApproach(string test_name) : number_of_links_(0), number_of_origin_destination_pairs_(0), test_name_(test_name) {
+    GetData();
+    adjacency_list_.resize(number_of_nodes_);
+    for (int i = 0; i < number_of_links_; i++)
+      adjacency_list_[links_[i].init].push_back(i);
+    best_ans_ = GetBestAnswer();
+  }
+  virtual ~TrafficAssignmentApproach() {}
+  T ObjectiveFunction() {
+    T ans = 0;
+    for (int i = 0; i < number_of_links_; i++)
+      ans += links_[i].DelayInteg();
+    return ans;
+  }
   void ShowStatistics() {
-    cout << "best ans: " << GetBestAnswer() << '\n';
+    cout << "RGAP: " << RelativeGap() << '\n';
+    cout << "best ans: " << best_ans_ << '\n';
     cout << "obj function: " << ObjectiveFunction() << '\n';
     //for (int i = 0; i < number_of_links_; i++)
     //  cout << "from: " << links[i].init + 1 << " to " << links[i].term + 1 << " volume " << links[i].flow << " cost " <<
     //  links[i].Delay() << '\n';
   }
+  virtual void SolveFlow() {};
+};
+
+template <typename T>                    // value type
+class RouteBasedApproach : public TrafficAssignmentApproach <T> {
+using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
+private:
+  queue <int> ready_to_implement_, tasks_;
+  string test_name_;
+  T alpha_ = 1e-4;
+  mutex mtx_, mtx_tasks_;
   T GetDelta() {
     T delta = 0;
-    for (int t = 0; t < number_of_origin_destination_pairs_; t++)
-      delta = max(delta, origin_destination_pairs_[t].GetCurrentDelta());
+    for (int t = 0; t < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; t++)
+      delta = max(delta, TrafficAssignmentApproach<T>::origin_destination_pairs_[t].GetCurrentDelta());
     //cout << delta << '\n';
     return delta;
   }
   bool NewRouteFound() {
     bool fl = false;
-    for (auto& now : origin_destination_pairs_)
+    for (auto& now : TrafficAssignmentApproach<T>::origin_destination_pairs_)
       fl = (now.FindNewRoute() || fl);
     return fl;
   }
-  void ThreadCalculation() {
-    while (!tasks_.empty()) {
+  void ThreadCalculation(const bool& finished) {
+    while (!finished) {
+      if (tasks_.empty())
+        this_thread::sleep_for(100ms);
       int j = -1;
       mtx_tasks_.lock();
       if (!tasks_.empty()) {
@@ -454,36 +490,137 @@ public:
       mtx_tasks_.unlock();
       if (j == -1)
         continue;
-      origin_destination_pairs_[j].CalculateNextUpdate(mtx_);
-      origin_destination_pairs_[j].ImplementNextUpdate(mtx_);
+      TrafficAssignmentApproach<T>::origin_destination_pairs_[j].CalculateNextUpdate(mtx_);
+      TrafficAssignmentApproach<T>::origin_destination_pairs_[j].ImplementNextUpdate(mtx_);
     }
   }
-  void SolveFlow() {
+public:
+  RouteBasedApproach(string test_name) : TrafficAssignmentApproach<T>::TrafficAssignmentApproach(test_name) {
+  }
+  void SolveFlow() override {
     int num_threads = thread::hardware_concurrency() - 1;
-    //num_threads = 1;
+    num_threads = 1;
     vector <thread> threads_list(num_threads);
-    vector <int> tasks_order(number_of_origin_destination_pairs_);
+    vector <int> tasks_order(TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_);
     vector <int> now_in_process(num_threads, 0);
-    for (int i = 0; i < number_of_origin_destination_pairs_; i++)
+    for (int i = 0; i < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; i++)
       tasks_order[i] = i;
     int count = 0;
-    while (NewRouteFound()) {
+    bool finished = false;
+    for (int i = 0; i < num_threads; i++)
+      threads_list[i] = thread(&RouteBasedApproach<T>::ThreadCalculation, this, ref(finished));
+    while (count++ < 6) {
+      NewRouteFound();
       auto start = chrono::high_resolution_clock::now();
       while (GetDelta() > alpha_) {
         random_shuffle(tasks_order.begin(), tasks_order.end());
-        for (int i = 0; i < number_of_origin_destination_pairs_; i++)
-          if (origin_destination_pairs_[tasks_order[i]].RoutesCount() > 1)
+        mtx_tasks_.lock();
+        for (int i = 0; i < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; i++)
+          if (TrafficAssignmentApproach<T>::origin_destination_pairs_[tasks_order[i]].RoutesCount() > 1)
             tasks_.push(tasks_order[i]);
-        for (int i = 0; i < num_threads; i++)
-          threads_list[i] = thread(&RouteBasedApproach<T>::ThreadCalculation, this);
-        for_each(threads_list.begin(), threads_list.end(), mem_fn(&thread::join));
+        mtx_tasks_.unlock();
+        while (!tasks_.empty())
+          this_thread::sleep_for(200ms);
       }
       auto end = chrono::high_resolution_clock::now();
       chrono::duration<float> duration = end - start;
       cout << "Duration of balance " << duration.count() << " sec \n";
+      TrafficAssignmentApproach<T>::ShowStatistics();
       //ShowStatistics();
     }
-    ShowStatistics();
+    finished = true;
+    for_each(threads_list.begin(), threads_list.end(), mem_fn(&thread::join));
+    //TrafficAssignmentApproach<T>::ShowStatistics();
+  }
+};
+
+template <typename T>                    // value type
+class LinkBasedApproach : public TrafficAssignmentApproach <T> {
+  using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
+private:
+  MatrixXd flow_;
+  const int number_of_iterations_ = 1e2;
+  const T delta = 0.2;
+  void UpdateFlowInfo() {
+    for (int i = 0; i < TrafficAssignmentApproach<T>::number_of_links_; i++)
+      TrafficAssignmentApproach<T>::links_[i].flow = flow_(i, 0);
+  }
+  // use only ChangeFlow in order to change flow_
+  void ChangeFlow(MatrixXd temp) {
+    flow_ += temp;
+    UpdateFlowInfo();
+  }
+  MatrixXd AllOrNothingSolution() {
+    MatrixXd temp(TrafficAssignmentApproach<T>::number_of_links_, 1);
+    for (auto& od_pair : TrafficAssignmentApproach<T>::origin_destination_pairs_) {
+      vector <int> route = od_pair.BestRoute();
+      for (auto now : route)
+        temp(now, 0) += od_pair.GetDemand();
+    }
+    return temp;
+  }
+  MatrixXd FrankWolfDirection() {
+    return AllOrNothingSolution() - flow_;
+  }
+  MatrixXd GenerateHessian() {
+    MatrixXd result(TrafficAssignmentApproach<T>::number_of_links_, TrafficAssignmentApproach<T>::number_of_links_);
+    for (int i = 0; i < TrafficAssignmentApproach<T>::number_of_links_; i++)
+      result(i, i) = TrafficAssignmentApproach<T>::links_[i].DelaySecondDer();
+    return result;
+  }
+  T CalculateN(const MatrixXd& direction_dash, const MatrixXd& hessian_matrix, const MatrixXd& all_or_nothing) {
+    return (direction_dash.transpose() * hessian_matrix * all_or_nothing)(0, 0);
+  }
+  T CalculateD(const MatrixXd& direction_dash, const MatrixXd& hessian_matrix, const MatrixXd& all_or_nothing) {
+    return (direction_dash.transpose() * hessian_matrix * (all_or_nothing - direction_dash))(0, 0);
+  }
+  T CalculateAlpha(const MatrixXd& direction_dash, const MatrixXd& hessian_matrix, const MatrixXd& all_or_nothing) {
+    T n = CalculateN(direction_dash, hessian_matrix, all_or_nothing), d = CalculateD(direction_dash, hessian_matrix, all_or_nothing);
+    if (d > 0) {
+      if (n / d > 1 - delta)
+        return 1 - delta;
+      else
+        return n / d;
+    }
+    else
+      return 0;
+    return (direction_dash.transpose() * hessian_matrix * (all_or_nothing - direction_dash))(0, 0);
+  }
+  MatrixXd GenerateS(const MatrixXd& previous_s, const MatrixXd& direction_dash, const MatrixXd& hessian_matrix, const MatrixXd& all_or_nothing) {
+    T alpha = CalculateAlpha(direction_dash, hessian_matrix, all_or_nothing);
+    return alpha * previous_s + (1 - alpha) * all_or_nothing;
+  }
+  MatrixXd ConjugateFrankWolfDirection(const MatrixXd& s) {
+    return s - flow_;
+  }
+  bool TryToImplementUpdate(MatrixXd flow_update) {
+    T cur_func = TrafficAssignmentApproach<T>::ObjectiveFunction();
+    ChangeFlow(flow_update);
+    T updated_func = TrafficAssignmentApproach<T>::ObjectiveFunction();
+    if (cur_func < updated_func) {
+      ChangeFlow(-flow_update);
+      return false;
+    }
+    return true;
+  }
+public:
+  LinkBasedApproach(string test_name) : TrafficAssignmentApproach<T>::TrafficAssignmentApproach(test_name) {
+    flow_ = MatrixXd(TrafficAssignmentApproach<T>::number_of_links_, 1);
+  }
+  void SolveFlow() override {
+    ChangeFlow(AllOrNothingSolution());
+    T tau = 1;
+    MatrixXd descent_direction = flow_, s = flow_;
+    for (int cnt_iterations = 0; cnt_iterations < number_of_iterations_; cnt_iterations++) {
+      s = GenerateS(s, (1 - tau) * descent_direction, GenerateHessian(), AllOrNothingSolution());
+      descent_direction = ConjugateFrankWolfDirection(s);
+      tau = 0;
+      for (T k = 0.5, i = 0; i < 10; i++, k /= 2)
+        if (TryToImplementUpdate(k * descent_direction))
+          tau += k;
+      TrafficAssignmentApproach<T>::ShowStatistics();
+    }
+    TrafficAssignmentApproach<T>::ShowStatistics();
   }
 };
 }
