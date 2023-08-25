@@ -66,6 +66,13 @@ namespace traffic_assignment {
         links_[mapping_links_inv.at(i)].flow += temp_flow(i, 0);
       }
     }
+    void UpdateRoutesFlow(const MatrixXd& routes_flow) {
+      for (int i = 0; i < routes_.size(); i++) 
+        for (auto now : routes_[i]) {
+          links_flow_[now] += routes_flow(i, 0);
+          links_[now].flow += routes_flow(i, 0);
+        }
+    }
     T GetDelay() {
       T delay = 0;
       for (const auto& route : routes_) 
@@ -85,6 +92,18 @@ namespace traffic_assignment {
       for (int i = 0; i < temp_flow.rows(); i++)
         delay_column(i, 0) = links_[mapping_links_inv.at(i)].Delay(links_[mapping_links_inv.at(i)].flow + temp_flow(i, 0));
       return delay_column;
+    }
+    MatrixXd CreateRoutesDelayColumn() {
+      MatrixXd delay_column(routes_.size(), 1);
+      for (int i = 0; i < routes_.size(); i++)
+        delay_column(i, 0) = Link<T>::GetLinksDelay(links_, routes_[i]);
+      return delay_column;
+    }
+    MatrixXd CreateEColumn() {
+      MatrixXd e(routes_.size(), 1);
+      for (int i = 0; i < routes_.size(); i++)
+        e(i, 0) = 1;
+      return e;
     }
     tuple < unordered_map <int, int>, unordered_map <int, int>, unordered_map <int, int>, unordered_map <int, int>, MatrixXd > Compression(const vector <vector <int>>& routes) {
       int count = 0;
@@ -123,50 +142,41 @@ namespace traffic_assignment {
       }
       return { mapping_nodes, mapping_nodes_inv, mapping_edges, mapping_edges_inv, compressed_adjacency_matrix };
     }
-    /*void UpdateNextData() {
-      T delay_min = 1e9, delay_max = 0, delay_route;
-      if (next_routes_.size() > 0) {
-        delay_route = 0;
-        for (auto now : next_routes_[0])
-          delay_route += links_[now].Delay(fixed_links_flow_[now] + next_links_flow_[now]);
-        delay_min = delay_route;
-        delay_max = delay_route;
-      }
-      for (int i = 1; i < next_routes_.size(); i++) {
-        delay_route = 0;
-        for (auto now : next_routes_[i])
-          delay_route += links_[now].Delay(fixed_links_flow_[now] + next_links_flow_[now]);
-        delay_min = min(delay_min, delay_route);
-        delay_max = max(delay_max, delay_route);
-      }
-      next_delay_ = delay_min;
-      next_delta_ = delay_max - delay_min;
-    }*/
     void BalanceRoutes();
-    /*void UpdateCurrentDelay() {
-      T delay_min = 1e9, delay_route;
-      if (current_routes_.size() > 0) {
-        delay_route = Link<T>::GetLinksDelay(links_, current_routes_[0]);
-        delay_min = delay_route;
+    MatrixXd CreateRoutesJacobiMatrix() {
+      int m = routes_.size();
+      MatrixXd res(m, m);
+      for (int i = 0; i < m; i++) {
+        unordered_set <int> links_cur_route;
+        for (auto now : routes_[i])
+          links_cur_route.insert(now);
+        for (int j = 0; j < m; j++) {
+          res(i, j) = 0;
+          for (auto now : routes_[j])
+            if (links_cur_route.count(now))
+              res(i, j) += links_[now].DelayDer();
+        }
       }
-      for (int i = 1; i < current_routes_.size(); i++) {
-        delay_route = Link<T>::GetLinksDelay(links_, current_routes_[i]);
-        delay_min = min(delay_min, delay_route);
-      }
-      current_delay_ = delay_min;
+      return res;
     }
-    void GetFixedFlow(mutex& mtx) {
-      fixed_links_flow_.clear();
-      mtx.lock();
-      //auto start = chrono::high_resolution_clock::now();
-      for (int i = 0; i < current_routes_.size(); i++)
-        for (auto now : current_routes_[i])
-          fixed_links_flow_[now] = links_[now].flow - current_links_flow_[now];
-      //auto end = chrono::high_resolution_clock::now();
-      //chrono::duration<float> duration = end - start;
-      //cout << "Duration of calc_next " << duration.count() << " sec \n";
-      mtx.unlock();
-    }*/
+    MatrixXd CreateT() {
+      MatrixXd e = CreateEColumn(), jacobi_inv = CreateRoutesJacobiMatrix().inverse();
+      return (e.transpose() * jacobi_inv * CreateRoutesDelayColumn()) / (e.transpose() * jacobi_inv * e)(0, 0);
+    }
+    void BalanceRoutes2() {
+      ClearFlow();
+      int m = routes_.size();
+      MatrixXd routes_flow(m, 1);
+      for (int i = 0; i < m; i++)
+        routes_flow(i, 0) = demand_ / m;
+      UpdateRoutesFlow(routes_flow);
+      while (GetCurrentDelta() > eps_) {
+        routes_flow -= CreateRoutesJacobiMatrix().inverse() * (CreateRoutesDelayColumn() - CreateEColumn() * CreateT());
+        ClearFlow();
+        UpdateRoutesFlow(routes_flow);
+        //cout << routes_flow << '\n';
+      }
+    }
   public:
     OriginDestinationPair(int& origin, int& dest, T& demand, vector <Link <T>>& links, vector <vector <int>>& adjacency_list) :
       origin_(origin), dest_(dest), demand_(demand), links_(links), adjacency_list_(adjacency_list), current_delay_(0) { };
@@ -206,21 +216,6 @@ namespace traffic_assignment {
       reverse(new_route.begin(), new_route.end());
       return new_route;
     }
-    /*
-    bool FindNewRoute() {
-      vector <int> new_route = BestRoute();
-      if (Link<T>::GetLinksDelay(links_, new_route) < current_delay_ || current_routes_.size() == 0) {
-        current_delay_ = Link<T>::GetLinksDelay(links_, new_route);
-        current_routes_.push_back(new_route);
-        if (current_routes_.size() == 1)
-          for (auto now : current_routes_[0]) {
-            links_[now].flow += demand_;
-            current_links_flow_[now] = demand_;
-          }
-        return true;
-      }
-      return false;
-    }*/
     bool AddNewRoute(vector <int> new_route) {
       for (auto route : routes_)
         if (new_route == route)
@@ -269,7 +264,8 @@ namespace traffic_assignment {
         }
         if (delay_best < delay) {
           routes_.push_back(possible_routes[best_route]);
-          BalanceRoutes();
+          //BalanceRoutes();
+          BalanceRoutes2();
           delay = GetDelay();
         }
         swap(possible_routes[best_route], possible_routes[possible_routes.size() - 1]);
@@ -559,6 +555,7 @@ namespace traffic_assignment {
     }
   };
 
+  /*
   template <typename T>                    // value type
   class LinkBasedApproach : public TrafficAssignmentApproach <T> {
     using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
@@ -648,4 +645,5 @@ namespace traffic_assignment {
       TrafficAssignmentApproach<T>::ShowStatistics();
     }
   };
+  */
 }
