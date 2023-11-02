@@ -1,34 +1,40 @@
 namespace traffic_assignment {
   #define MAX_ROUTE_DELAY 1e9
+
   template <class T>
   struct Link {
     using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
   public:
     int init, term, type;
-    T capacity, length, free_flow_time, b, power, speed, toll, flow;
+    long double power, capacity, length, free_flow_time, b, speed, toll;
+    T flow;
     Link(int init, int term, int type, T capacity, T length,
       T free_flow_time, T b, T power, T speed, T toll) :
       init(init), term(term), type(type), capacity(capacity), length(length),
-      free_flow_time(free_flow_time), b(b), power(power), speed(speed), toll(toll) { };
+      free_flow_time(free_flow_time), b(b), power(power), speed(speed), toll(toll), flow(0) { };
     T Delay(T temp_flow = -1) {
       if (temp_flow == -1)
         temp_flow = flow;
-      return free_flow_time + 0.15 * free_flow_time * pow(temp_flow, 4) / pow(capacity, 4);
+      //cout << power << endl;
+      return free_flow_time + b * free_flow_time * pow(temp_flow, power) / pow(capacity, power);
     }
     T DelayInteg(T temp_flow = -1) {
       if (temp_flow == -1)
         temp_flow = flow;
-      return free_flow_time * (temp_flow + 0.15 * capacity * pow(temp_flow / capacity, 5) / 5);
+      //cout << power << endl;
+      return free_flow_time * (temp_flow + b * capacity * pow(temp_flow / capacity, power + 1) / (power + 1));
     }
     T DelayDer(T temp_flow = -1) {
       if (temp_flow == -1)
         temp_flow = flow;
-      return free_flow_time * 0.15 * 4 * pow(temp_flow / capacity, 3) / capacity;
+      //cout << power << endl;
+      return free_flow_time * b * power * pow(temp_flow / capacity, power - 1) / capacity;
     }
     T DelaySecondDer(T temp_flow = -1) {
       if (temp_flow == -1)
         temp_flow = flow;
-      return free_flow_time * 0.15 * 12 * pow(temp_flow, 2) / pow(capacity, 4);
+      //cout << power << endl;
+      return free_flow_time * b * power * (power - 1) * pow(temp_flow, power - 2) / pow(capacity, power);
     }
     static T GetLinksDelay(vector <Link <T>>& links, const vector <int>& links_list) {
       T ans = 0;
@@ -48,7 +54,7 @@ namespace traffic_assignment {
     const vector <vector <int>>& adjacency_list_;
     vector <vector <int>> routes_;
     unordered_map <int, T> links_flow_;
-    const T eps_ = 1e-6;
+    const T eps_ = 1e-32;
     void ClearFlow() {
       unordered_set <int> used_links;
       for (const auto& route : routes_)
@@ -67,7 +73,7 @@ namespace traffic_assignment {
       }
     }
     void UpdateRoutesFlow(const MatrixXd& routes_flow) {
-      for (int i = 0; i < routes_.size(); i++) 
+      for (int i = 0; i < routes_.size(); i++)
         for (auto now : routes_[i]) {
           links_flow_[now] += routes_flow(i, 0);
           links_[now].flow += routes_flow(i, 0);
@@ -75,7 +81,7 @@ namespace traffic_assignment {
     }
     T GetDelay() {
       T delay = 0;
-      for (const auto& route : routes_) 
+      for (const auto& route : routes_)
         delay = max(delay, Link<T>::GetLinksDelay(links_, route));
       return delay;
     }
@@ -159,19 +165,51 @@ namespace traffic_assignment {
       }
       return res;
     }
+    T ConstRouteDelay() {
+      T delay_const_route = -1;
+      for (const auto& route : routes_) {
+        bool fl = true;
+        for (const auto& now : route) {
+          if (links_[now].power != 0)
+            fl = false;
+        }
+        if (fl)
+          delay_const_route = Link<T>::GetLinksDelay(links_, route);
+      }
+      return delay_const_route;
+    }
     MatrixXd CreateT() {
-      MatrixXd e = CreateEColumn(), jacobi_inv = CreateRoutesJacobiMatrix().inverse();
-      return (e.transpose() * jacobi_inv * CreateRoutesDelayColumn()) / (e.transpose() * jacobi_inv * e)(0, 0);
+      T delay_const_route = ConstRouteDelay();
+      if (delay_const_route == -1) {
+        MatrixXd e = CreateEColumn(), jacobi_inv = CreateRoutesJacobiMatrix().inverse();
+        return (e.transpose() * jacobi_inv * CreateRoutesDelayColumn()) / (e.transpose() * jacobi_inv * e)(0, 0);
+      }
+      else {
+        MatrixXd res(1, 1);
+        res(0, 0) = delay_const_route;
+        return res;
+      }
+    }
+    T CalculateExcess(const MatrixXd& routes_flow) {
+      T total_routes_flow = 0;
+      for (int i = 0; i < routes_flow.rows(); i++)
+        total_routes_flow += routes_flow(i, 0);
+      return total_routes_flow - demand_;
     }
     void BalanceRoutes2() {
       ClearFlow();
       int m = routes_.size();
+      T excess = 0;
       MatrixXd routes_flow(m, 1);
       for (int i = 0; i < m; i++)
         routes_flow(i, 0) = demand_ / m;
       UpdateRoutesFlow(routes_flow);
       while (GetCurrentDelta() > eps_) {
         routes_flow -= CreateRoutesJacobiMatrix().inverse() * (CreateRoutesDelayColumn() - CreateEColumn() * CreateT());
+        excess = CalculateExcess(routes_flow);
+        //cout << excess << '\n';
+        for (int i = 0; i < m; i++)
+          routes_flow(i, 0) -= excess / m;
         ClearFlow();
         UpdateRoutesFlow(routes_flow);
         //cout << routes_flow << '\n';
@@ -281,6 +319,9 @@ namespace traffic_assignment {
     T GetDemand() {
       return demand_;
     }
+    pair <int, int> GetOriginDestination() {
+      return { origin_, dest_ };
+    }
   };
   template <class T>
   void OriginDestinationPair<T>::BalanceRoutes() {
@@ -319,8 +360,8 @@ namespace traffic_assignment {
     int number_of_origin_destination_pairs_, number_of_links_, number_of_nodes_, number_of_zones_;
     string test_name_;
     ofstream time_out, rgap_out, func_out;
-    std::chrono::time_point<struct std::chrono::steady_clock, class std::chrono::duration<__int64, struct std::ratio<1, 1000000000> > > start_;
-    std::chrono::duration<float> time_on_statistics_;
+    std::chrono::time_point<std::chrono::high_resolution_clock> start_;
+    long double time_on_statistics_;
     bool IsNumber(char c) {
       return c >= '0' && c <= '9';
     }
@@ -502,10 +543,13 @@ namespace traffic_assignment {
       time_out.open("time_out.txt", std::ios::app);
       func_out.open("func_out.txt", std::ios::app);
       rgap_out.open("rgap_out.txt", std::ios::app);
-      rgap_out << setprecision(15) << RelativeGap() << '\n';
-      func_out << setprecision(15) << ObjectiveFunction() << '\n';
-      time_on_statistics_ += std::chrono::high_resolution_clock::now() - statistics_start;
-      time_out << (chrono::duration_cast<chrono::seconds>(std::chrono::high_resolution_clock::now() - start_ - time_on_statistics_)).count() << '\n';
+      //cout << RelativeGap() << '\n';
+      rgap_out << setprecision(30) << RelativeGap() << '\n';
+      //cout << setprecision(30) << ObjectiveFunction() << '\n';
+      func_out << setprecision(30) << ObjectiveFunction() << '\n';
+      //cout << (chrono::duration_cast<chrono::milliseconds>(std::chrono::high_resolution_clock::now() - statistics_start)).count() << '\n';
+      time_on_statistics_ += 0.001 * (chrono::duration_cast<chrono::seconds>(std::chrono::high_resolution_clock::now() - statistics_start)).count();
+      time_out << (chrono::duration_cast<chrono::seconds>(std::chrono::high_resolution_clock::now() - start_)).count() - time_on_statistics_ << '\n';
       time_out.close();
       func_out.close();
       rgap_out.close();
@@ -519,7 +563,7 @@ namespace traffic_assignment {
   private:
     queue <int> ready_to_implement_, tasks_;
     string test_name_;
-    T alpha_ = 1e-4;
+    T alpha_ = 1e-30;
     mutex mtx_, mtx_tasks_;
     T GetDelta() {
       T delta = 0;
@@ -555,6 +599,142 @@ namespace traffic_assignment {
     }
   };
 
+  template <typename T>
+  class SolutionCheck : public TrafficAssignmentApproach <T> {
+  private: 
+    map <pair <int, int>, int> origin_destination_number_, link_number_;
+    vector <vector <vector <int>>> od_routes_info_;
+    vector <vector <T>> od_routes_flow_;
+    //vector <T> solution_od_routes_flow, solution_od_routes_info;
+    int GetOriginDestinationPair(ifstream& in) {
+      int origin, dest;
+      in >> origin >> dest;
+      origin--; dest--;
+      //cout << origin << ' ' << dest << ' ' << origin_destination_number_[{origin, dest}] << ' ';
+      return origin_destination_number_[{origin, dest}];
+    }
+    vector <T> GetOriginDestinationFLows(ifstream& in) {
+      char c = '#';
+      vector <T> flows;
+      T temp = 0, k = 1;
+      while (c != '{')
+        in >> c;
+      //cout << '[';
+      while (c != '}') {
+        if (in.peek() == ' ') {
+          in.ignore();
+          continue;
+        }
+        if (isdigit(in.peek())) {
+          in >> temp;
+          //cout << temp << ' ';
+          flows.push_back(temp);
+        }
+        else 
+          in >> c;
+      }
+      //cout << "]\n";
+      return flows;
+    }
+    vector <int> ConvertNodesRouteIntoLinks(const vector <int>& nodes) {
+      vector <int> res;
+      for (int i = 1; i < nodes.size(); i++) 
+        res.push_back(link_number_[{nodes[i - 1], nodes[i]}]);
+      return res;
+    }
+    vector <int> GetRoute(ifstream& in) {
+      vector <int> nodes, route;
+      int temp;
+      char c; in >> c;
+      while (c != '[')
+        in >> c;
+      while (c != ']') {
+        if (in.peek() == ' ') {
+          in.ignore();
+          continue;
+        }
+        if (isdigit(in.peek())) {
+          in >> temp;
+          temp--;
+          //cout << temp << ' ';
+          nodes.push_back(temp);
+        }
+        else
+          in >> c;
+      }
+      return ConvertNodesRouteIntoLinks(nodes);
+    }
+    vector <vector <int>> GetOriginDestinationRoutes(ifstream& in, int number_of_routes) {
+      vector <vector <int>> routes;
+      for (int i = 0; i < number_of_routes; i++)
+        routes.push_back(GetRoute(in));
+      return routes;
+    }
+    void GetSolutionInfo(string test_name) {
+      string line;
+      ifstream in(test_name + "_flows.txt");
+      getline(in, line);
+      for (int t = 0; t < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; t++) {
+        cout << setprecision(15);
+        int i = GetOriginDestinationPair(in);
+        //cout << "OD_pair: i = " << i << "\n     ";
+        od_routes_flow_[i] = GetOriginDestinationFLows(in);
+        od_routes_info_[i] = GetOriginDestinationRoutes(in, od_routes_flow_[i].size());
+        /*for (int j = 0; j < od_routes_flow_[i].size(); j++) {
+          cout << "ROUTE: ";
+          for (auto now : od_routes_info_[i][j])
+            cout << now << ' ';
+          cout << "ROUTE FLOW: " << od_routes_flow_[i][j] << "\n     ";
+        }
+        cout << '\n';*/
+        T temp; in >> temp;
+      }
+    }
+    void ContributeFlowValues() {
+      for (int i = 0; i < TrafficAssignmentApproach<T>::number_of_links_; i++)
+        TrafficAssignmentApproach<T>::links_[i].flow = 0;
+      for (int t = 0; t < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; t++) {
+        for (int i = 0; i < od_routes_info_[t].size(); i++)
+          for (auto now : od_routes_info_[t][i])
+            TrafficAssignmentApproach<T>::links_[now].flow += od_routes_flow_[t][i];
+      }
+    }
+    T IncludeExcessFlow() {
+      T total_excess = 0;
+      for (int t = 0; t < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; t++) {
+        T excess = TrafficAssignmentApproach<T>::origin_destination_pairs_[t].GetDemand();
+        for (int i = 0; i < od_routes_flow_[t].size(); i++)
+          excess -= od_routes_flow_[t][i];
+        for (int i = 0; i < od_routes_info_[t].size(); i++)
+          od_routes_flow_[t][i] += excess / od_routes_info_[t].size();
+        total_excess += excess;
+      }
+      ContributeFlowValues();
+      return total_excess;
+    }
+  public:
+    SolutionCheck(string test_name) : TrafficAssignmentApproach<T>::TrafficAssignmentApproach(test_name) {
+      for (int t = 0; t < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; t++)
+        origin_destination_number_[TrafficAssignmentApproach<T>::origin_destination_pairs_[t].GetOriginDestination()] = t;
+      for (int t = 0; t < TrafficAssignmentApproach<T>::number_of_links_; t++)
+        link_number_[{TrafficAssignmentApproach<T>::links_[t].init, TrafficAssignmentApproach<T>::links_[t].term}] = t;
+      od_routes_info_.resize(TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_);
+      od_routes_flow_.resize(TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_);
+      GetSolutionInfo(test_name);
+      ContributeFlowValues();
+      cout << setprecision(30) << TrafficAssignmentApproach<T>::ObjectiveFunction() << '\n';
+      cout << IncludeExcessFlow() << '\n';
+      cout << setprecision(30) << TrafficAssignmentApproach<T>::ObjectiveFunction() << '\n';
+
+    }
+    void SolveFlow() {
+      cout << 1;
+    }
+    void Check() {
+      T total_flow_loss = 0;
+
+    }
+  };
   /*
   template <typename T>                    // value type
   class LinkBasedApproach : public TrafficAssignmentApproach <T> {
