@@ -43,7 +43,8 @@ void TrafficAssignmentTestSolutions() {
   while (getline(in, line)) {
     //TrafficAssignmentTest<traffic_assignment::SolutionCheck <dec101_t>>(line);
     //traffic_assignment::SolutionCheck <dec101_t> a(line);
-    TrafficAssignmentTest<traffic_assignment::RouteBasedApproach <dec101_t>>(line);
+    //TrafficAssignmentTest<traffic_assignment::RouteBasedApproach <dec101_t>>(line);
+    TrafficAssignmentTest<traffic_assignment::NewRouteBasedApproach <dec101_t>>(line);
     //TrafficAssignmentTest<traffic_assignment::RouteBasedApproach <long double>>(line);
   }
 }
