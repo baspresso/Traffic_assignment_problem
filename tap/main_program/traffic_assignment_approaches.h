@@ -47,7 +47,7 @@ namespace traffic_assignment {
   template <class T>
   class OriginDestinationPair {
     using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
-  private:
+  protected:
     int origin_, dest_;
     T demand_, current_delay_, next_delay_, next_delta_;
     vector <Link <T>>& links_;
@@ -322,7 +322,35 @@ namespace traffic_assignment {
     pair <int, int> GetOriginDestination() {
       return { origin_, dest_ };
     }
+    vector <T> RoutesDelays() {
+      vector <T> routes_delays(routes_.size());
+      for (int i = 0; i < routes_.size(); i++)
+        routes_delays[i] = Link<T>::GetLinksDelay(links_, routes_[i]);
+      return routes_delays;
+    }
+    vector <vector <int>> RoutesInfo() {
+      return routes_;
+    }
+    void SetDefaultFlow() {
+      ClearFlow();
+      for (const auto& route : routes_) {
+        for (auto now : route) {
+          links_[now].flow += demand_ / routes_.size();
+          links_flow_[now] += demand_ / routes_.size();
+        }
+      }
+    }
+    void SetNewRoutesInfo(const vector <vector <int>>& new_routes, const vector <T>& new_routes_flow) {
+      ClearFlow();
+      routes_ = new_routes;
+      for (int i = 0; i < new_routes_flow.size(); i++) 
+        for (auto now : new_routes[i]) {
+          links_[now].flow += new_routes_flow[i];
+          links_flow_[now] += demand_ / routes_.size();
+        }
+    }
   };
+
   template <class T>
   void OriginDestinationPair<T>::BalanceRoutes() {
     ClearFlow();
@@ -345,7 +373,6 @@ namespace traffic_assignment {
       UpdateFlow(temp_flow, mapping_edges_inv);
     }
   }
-
 
   template <typename T>
   class TrafficAssignmentApproach {
@@ -594,6 +621,141 @@ namespace traffic_assignment {
             //cout << TrafficAssignmentApproach<T>::origin_destination_pairs_[t].GetCurrentDelta() << '\n';
           }
         }
+        TrafficAssignmentApproach<T>::GetStatistics();
+      }
+    }
+  };
+
+  template <typename T>                    // value type
+  class NewRouteBasedApproach : public TrafficAssignmentApproach <T> {
+    using MatrixXd = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
+  private:
+    queue <int> ready_to_implement_, tasks_;
+    string test_name_;
+    T alpha_ = 1e-10;
+    mutex mtx_, mtx_tasks_;
+    T GetDelta() {
+      T delta = 0;
+      for (int t = 0; t < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; t++)
+        delta = max(delta, TrafficAssignmentApproach<T>::origin_destination_pairs_[t].GetCurrentDelta());
+      //cout << delta << '\n';
+      return delta;
+    }
+    int TotalNumberOfRoutes() {
+      int total_route_count = 0;
+      for (int i = 0; i < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; i++)
+        total_route_count += TrafficAssignmentApproach<T>::origin_destination_pairs_[i].RoutesCount();
+      return total_route_count;
+    }
+    MatrixXd EMatrix() {
+      int total_route_count = TotalNumberOfRoutes();
+      MatrixXd e(TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_, total_route_count);
+      for (int i = 0, temp = 0; i < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; i++) {
+        for (int j = 0; j < TrafficAssignmentApproach<T>::origin_destination_pairs_[i].RoutesCount(); j++)
+          e(i, temp + j) = 1;
+        temp += TrafficAssignmentApproach<T>::origin_destination_pairs_[i].RoutesCount();
+      }
+      return e;
+    }
+    MatrixXd AllRoutesDelaysColumn() {
+      int total_route_count = TotalNumberOfRoutes();
+      MatrixXd all_routes_delays(total_route_count, 1);
+      for (int i = 0, temp = 0; i < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; i++) {
+        vector <T> od_routes_delays = TrafficAssignmentApproach<T>::origin_destination_pairs_[i].RoutesDelays();
+        for (int j = 0; j < od_routes_delays.size(); j++) 
+          all_routes_delays(temp + j, 0) = od_routes_delays[j];
+        temp += od_routes_delays.size();
+      }
+      return all_routes_delays;
+    }
+    MatrixXd AllRoutesJacobiMatrix() {
+      int total_route_count = TotalNumberOfRoutes();
+      vector <vector <int>> all_routes(total_route_count);
+      for (int i = 0, temp = 0; i < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; i++) {
+        vector <vector <int>> od_routes = TrafficAssignmentApproach<T>::origin_destination_pairs_[i].RoutesInfo();
+        for (int j = 0; j < od_routes.size(); j++)
+          all_routes[temp + j] = od_routes[j];
+        temp += od_routes.size();
+      }
+      MatrixXd res(total_route_count, total_route_count);
+      for (int i = 0; i < total_route_count; i++) {
+        unordered_set <int> links_cur_route;
+        for (auto now : all_routes[i])
+          links_cur_route.insert(now);
+        for (int j = 0; j < total_route_count; j++) {
+          res(i, j) = 0;
+          for (auto now : all_routes[j])
+            if (links_cur_route.count(now))
+              res(i, j) += TrafficAssignmentApproach<T>::links_[now].DelayDer();
+        }
+      }
+      return res;
+    }
+    MatrixXd TMatrix(const MatrixXd& e, const MatrixXd& rev_jacobi) {
+      return (e * rev_jacobi * e.transpose()).inverse() * (e * rev_jacobi * AllRoutesDelaysColumn());
+    }
+    MatrixXd NextUpdate(const MatrixXd& all_routes_flows) {
+      int total_route_count = TotalNumberOfRoutes();
+      MatrixXd e = EMatrix(), rev_jacobi = AllRoutesJacobiMatrix().inverse();
+      return all_routes_flows - rev_jacobi * (AllRoutesDelaysColumn() - e.transpose() * TMatrix(e, rev_jacobi));
+    }
+    vector <T> CorrectNextRouteFlowInfo(const int origin_dest_pair, const vector <T>& next_flow) {
+      int cur_routes_cnt = TrafficAssignmentApproach<T>::origin_destination_pairs_[origin_dest_pair].RoutesCount();
+      vector <vector <int>> next_pos_routes, prev_routes = TrafficAssignmentApproach<T>::origin_destination_pairs_[origin_dest_pair].RoutesInfo();
+      vector <T> next_pos_flow;
+      T temp = 0;
+      for (int i = 0; i < cur_routes_cnt; i++) 
+        if (next_flow[i] > 0) {
+          next_pos_routes.push_back(prev_routes[i]);
+          next_pos_flow.push_back(next_flow[i]);
+          temp += next_flow[i];
+        }
+      for (int i = 0; i < next_pos_routes.size(); i++)
+        next_pos_flow[i] *= TrafficAssignmentApproach<T>::origin_destination_pairs_[origin_dest_pair].GetDemand() / temp;
+      TrafficAssignmentApproach<T>::origin_destination_pairs_[origin_dest_pair].SetNewRoutesInfo(next_pos_routes, next_pos_flow);
+      return next_pos_flow;
+    }
+    MatrixXd CorrectAllRouteFlowInfo(const MatrixXd& all_routes_flow) {
+      int cur_route_cnt = TotalNumberOfRoutes(), next_total_cnt = 0;
+      for (int i = 0; i < cur_route_cnt; i++)
+        if (all_routes_flow(i, 0) > 0)
+          next_total_cnt++;
+      MatrixXd next_all_routes_flow(next_total_cnt, 1);
+      int k = 0;
+      for (int i = 0, temp = 0; i < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; i++) {
+        int cur_routes_cnt = TrafficAssignmentApproach<T>::origin_destination_pairs_[i].RoutesCount();
+        vector <T> next_flow(cur_routes_cnt);
+        for (int j = 0; j < cur_routes_cnt; j++)
+          next_flow[j] = all_routes_flow(temp + j, 0);
+        temp += cur_routes_cnt;
+        vector <T> next_pos_routes = CorrectNextRouteFlowInfo(i, next_flow);
+        for (int j = 0; j < next_pos_routes.size(); j++)
+          next_all_routes_flow(k + j, 0) = next_pos_routes[j];
+        k += next_pos_routes.size();
+      }
+      return next_all_routes_flow;
+    }
+  public:
+    NewRouteBasedApproach(string test_name) : TrafficAssignmentApproach<T>::TrafficAssignmentApproach(test_name) {
+    }
+    void SolveFlow() override {
+      int count = 0;
+      while (count++ < 20) {
+        for (int origin = 0; origin < TrafficAssignmentApproach<T>::number_of_nodes_; origin++)
+          TrafficAssignmentApproach<T>::SingleOriginBestRoutes(origin);
+        int total_route_count = TotalNumberOfRoutes();
+        MatrixXd all_routes_flow(total_route_count, 1);
+        for (int i = 0, temp = 0; i < TrafficAssignmentApproach<T>::number_of_origin_destination_pairs_; i++) {
+          TrafficAssignmentApproach<T>::origin_destination_pairs_[i].SetDefaultFlow();
+          int cur_routes_cnt = TrafficAssignmentApproach<T>::origin_destination_pairs_[i].RoutesCount();
+          T cur_demand = TrafficAssignmentApproach<T>::origin_destination_pairs_[i].GetDemand();
+          for (int j = 0; j < cur_routes_cnt; j++)
+            all_routes_flow(temp + j, 0) = cur_demand / cur_routes_cnt;
+          temp += cur_routes_cnt;
+        }
+        auto start = chrono::high_resolution_clock::now();
+        while (GetDelta() > alpha_)
+          all_routes_flow = CorrectAllRouteFlowInfo(NextUpdate(all_routes_flow));
         TrafficAssignmentApproach<T>::GetStatistics();
       }
     }
